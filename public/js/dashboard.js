@@ -132,7 +132,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   }
   document.getElementById('refreshVan').addEventListener('click', loadVan);
 
-  // ---------------- DevSecOps Auto-Fix (IMPROVED VERSION) ----------------
+  // DevSecOps Auto-Fix
   document.getElementById('devFixBtn').addEventListener('click', async () => {
     const img = document.getElementById('devImageInput').value.trim();
     const out = document.getElementById('devResult');
@@ -141,7 +141,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
     out.textContent = `⏳ Requesting auto-fix for ${img} (this may take several minutes)...\n`;
     
     try {
-      // Step 1: Start the fix
       const startRes = await fetch('/api/devsecops/fix-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -158,17 +157,14 @@ document.addEventListener('DOMContentLoaded', ()=>{
       out.textContent += `📋 Task ID: ${taskId}\n`;
       out.textContent += `🔄 Polling for results...\n\n`;
       
-      // Step 2: Poll for the result every 2 seconds
       const poll = async () => {
         const res = await fetch(`/api/devsecops/fix-result/${taskId}`);
         const j = await res.json();
         
-        // Clear and update display with current status
         let displayText = `🖼️ Image: ${j.image}\n`;
         displayText += `📊 Status: ${j.status}\n`;
         displayText += `🕒 Started: ${new Date(j.when).toLocaleTimeString()}\n\n`;
         
-        // Show live logs
         if (j.logs && j.logs.length > 0) {
           displayText += '📝 Progress:\n';
           j.logs.forEach(log => {
@@ -177,7 +173,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
           displayText += '\n';
         }
         
-        // Show actions summary
         if (j.actions && j.actions.length > 0) {
           displayText += '🔧 Actions:\n';
           j.actions.forEach(action => {
@@ -190,21 +185,15 @@ document.addEventListener('DOMContentLoaded', ()=>{
           });
         }
         
-        // Show final result
         if (j.status === 'done') {
           displayText += '\n🎉 AUTO-FIX COMPLETED!\n';
           if (j.newImage) {
             displayText += `🆕 New hardened image: ${j.newImage}\n`;
             displayText += `💾 Run: docker run -it ${j.newImage}\n`;
-            displayText += `📊 You can now scan the new image to verify improvements\n`;
-          }
-          if (j.resultFile) {
-            displayText += `📄 Detailed log: ${j.resultFile}\n`;
           }
         } else if (j.status === 'error') {
           displayText += `\n💥 ERROR: ${j.error}\n`;
         } else {
-          // Still running - continue polling
           displayText += `\n⏳ Still working... (auto-refreshing)\n`;
         }
         
