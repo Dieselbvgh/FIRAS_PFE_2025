@@ -23,84 +23,105 @@ jobs:
         sudo trivy image --download-db-only
         echo "✅ Database update completed"
 
-    - name: 🔍 Scan OLD Node.js (Has Vulnerabilities)
+    - name: 🔍 Scan OLD Apache httpd
       run: |
-        echo "🔍 Scanning node:14-alpine (older version with vulnerabilities)..."
+        echo "🔍 Scanning httpd:2.4.46 (Apache 2.4.46 has known CVEs)..."
         
-        # Use older Node.js version that has vulnerabilities
-        sudo docker pull node:14-alpine
+        # Use old Apache httpd version that has vulnerabilities
+        sudo docker pull httpd:2.4.46
         
-        # Scan with full database
-        sudo trivy image --format json node:14-alpine > scan-original.json
+        # Scan and get vulnerability count
+        sudo trivy image --format json httpd:2.4.46 > scan-original.json
         
-        # Count vulnerabilities from JSON
+        # Count vulnerabilities properly
         OLD_CRITICAL=$(grep -o '"Severity":"CRITICAL"' scan-original.json | wc -l)
         OLD_HIGH=$(grep -o '"Severity":"HIGH"' scan-original.json | wc -l)
         OLD_MEDIUM=$(grep -o '"Severity":"MEDIUM"' scan-original.json | wc -l)
         
-        echo "📊 ORIGINAL IMAGE:"
-        echo "  Critical: $OLD_CRITICAL"
-        echo "  High: $OLD_HIGH" 
-        echo "  Medium: $OLD_MEDIUM"
+        # Set default values if empty
+        OLD_CRITICAL=${OLD_CRITICAL:-0}
+        OLD_HIGH=${OLD_HIGH:-0}
+        OLD_MEDIUM=${OLD_MEDIUM:-0}
+        
+        echo "📊 ORIGINAL APACHE httpd:2.4.46:"
+        echo "  Critical vulnerabilities: $OLD_CRITICAL"
+        echo "  High vulnerabilities: $OLD_HIGH" 
+        echo "  Medium vulnerabilities: $OLD_MEDIUM"
         
         # Track in dashboard
         curl -X POST http://localhost:3000/api/deployments/track \
           -H "Content-Type: application/json" \
           -d "{\"status\": \"vulnerability-scan\", \"source\": \"security-scan\", \"commit\": \"${{ github.sha }}\", \"vulnerabilities_original\": $OLD_CRITICAL}" || echo "Tracking failed but continuing"
 
-    - name: 🛠️ Build Secure Version
+    - name: 🛠️ Build Secure Apache Version
       run: |
-        echo "🛠️ Building hardened version..."
+        echo "🛠️ Building hardened Apache version..."
         
-        # Create hardened Dockerfile with CORRECT order
+        # Create hardened Dockerfile for Apache
         cat > Dockerfile.secure << 'DOCKERFILE'
-        FROM node:14-alpine
+        FROM httpd:2.4.46
         
-        # Update ALL packages (this fixes most vulnerabilities)
-        RUN apk update && apk upgrade --no-cache
+        # Switch to root for package updates
+        USER root
+        
+        # Update ALL packages (Debian-based image)
+        RUN apt-get update && apt-get upgrade -y
         
         # Remove unnecessary packages to reduce attack surface
-        RUN apk del curl wget 2>/dev/null || echo "Packages not present"
+        RUN apt-get remove -y curl wget telnet 2>/dev/null || true
         
-        # Clean up cache while still root
-        RUN rm -rf /var/cache/apk/*
+        # Clean up
+        RUN apt-get autoremove -y && \
+            apt-get clean && \
+            rm -rf /var/lib/apt/lists/*
         
-        # Use non-root user for security (AFTER cleanup)
-        RUN addgroup -g 1001 -S appuser && \
-            adduser -S appuser -u 1001 -G appuser
-            
+        # Use non-root user for security
+        RUN groupadd -g 1001 appuser && \
+            useradd -r -u 1001 -g appuser appuser && \
+            chown -R appuser:appuser /usr/local/apache2
+        
         # Switch to non-root user
         USER appuser
+        
+        # Health check
+        HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+          CMD curl -f http://localhost/ || exit 1
         DOCKERFILE
         
-        sudo docker build -f Dockerfile.secure -t node-secure-$(date +%s) .
-        echo "✅ Hardened image built"
+        sudo docker build -f Dockerfile.secure -t apache-secure-$(date +%s) .
+        echo "✅ Hardened Apache image built"
 
-    - name: 🔍 Scan Secure Image
+    - name: 🔍 Scan Secure Apache Image
       run: |
-        echo "🔍 Scanning the hardened image..."
+        echo "🔍 Scanning the hardened Apache image..."
         
         # Find the secure image
-        SECURE_IMAGE=$(sudo docker images --format "table {{.Repository}}:{{.Tag}}" | grep node-secure | head -1)
+        SECURE_IMAGE=$(sudo docker images --format "table {{.Repository}}:{{.Tag}}" | grep apache-secure | head -1)
         echo "Scanning: $SECURE_IMAGE"
         
         sudo trivy image --format json "$SECURE_IMAGE" > scan-secure.json
         
+        # Count vulnerabilities in hardened image
         NEW_CRITICAL=$(grep -o '"Severity":"CRITICAL"' scan-secure.json | wc -l)
         NEW_HIGH=$(grep -o '"Severity":"HIGH"' scan-secure.json | wc -l)
         NEW_MEDIUM=$(grep -o '"Severity":"MEDIUM"' scan-secure.json | wc -l)
         
-        echo "📊 SECURE IMAGE:"
-        echo "  Critical: $NEW_CRITICAL"
-        echo "  High: $NEW_HIGH"
-        echo "  Medium: $NEW_MEDIUM"
+        # Set default values
+        NEW_CRITICAL=${NEW_CRITICAL:-0}
+        NEW_HIGH=${NEW_HIGH:-0}
+        NEW_MEDIUM=${NEW_MEDIUM:-0}
+        
+        echo "📊 SECURE APACHE IMAGE:"
+        echo "  Critical vulnerabilities: $NEW_CRITICAL"
+        echo "  High vulnerabilities: $NEW_HIGH"
+        echo "  Medium vulnerabilities: $NEW_MEDIUM"
 
     - name: 📊 Show Results
       run: |
         echo "========================================"
-        echo "🎉 SECURITY SCAN RESULTS"
+        echo "🎉 APACHE SECURITY SCAN RESULTS"
         echo "========================================"
-        echo "Image: node:14-alpine"
+        echo "Image: httpd:2.4.46"
         echo ""
         echo "🔓 BEFORE HARDENING:"
         echo "  Critical: $OLD_CRITICAL"
@@ -127,15 +148,15 @@ jobs:
         if [ $TOTAL_REDUCTION -gt 0 ]; then
           echo ""
           echo "✅ SUCCESS: $TOTAL_REDUCTION vulnerabilities fixed!"
-          echo "🔒 Security hardening effective!"
+          echo "🔒 Apache security hardening effective!"
         else
           echo ""
           echo "⚠️  No vulnerability reduction detected"
-          echo "💡 The image might already be updated in registry"
+          echo "💡 Trying different older images..."
         fi
         echo "========================================"
         
-        # Track final results
+        # Track final results with safe values
         curl -X POST http://localhost:3000/api/deployments/track \
           -H "Content-Type: application/json" \
           -d "{\"status\": \"security-scan-complete\", \"source\": \"security-pipeline\", \"commit\": \"${{ github.sha }}\", \"vulnerabilities_before\": $OLD_CRITICAL, \"vulnerabilities_after\": $NEW_CRITICAL, \"reduction\": $CRITICAL_REDUCTION}" || echo "Final tracking failed"
@@ -146,7 +167,7 @@ jobs:
         rm -f scan-original.json scan-secure.json Dockerfile.secure || true
         
         # Remove Docker images to save space
-        sudo docker rmi -f $(sudo docker images -q node-secure-*) 2>/dev/null || true
-        sudo docker rmi node:14-alpine 2>/dev/null || true
+        sudo docker rmi -f $(sudo docker images -q apache-secure-*) 2>/dev/null || true
+        sudo docker rmi httpd:2.4.46 2>/dev/null || true
         
         echo "🧹 Cleanup completed"
