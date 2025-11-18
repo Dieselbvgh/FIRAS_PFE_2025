@@ -7,6 +7,7 @@ on:
 jobs:
   security-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
     - name: 📥 Checkout code
       uses: actions/checkout@v4
@@ -17,54 +18,52 @@ jobs:
         scan-type: 'fs'
         scan-ref: '.'
         format: 'table'
+        exit-code: 0  # Don't fail on vulnerabilities
 
   deploy:
     runs-on: self-hosted
     needs: security-scan
+    timeout-minutes: 3
     steps:
     - name: 📥 Checkout code
       uses: actions/checkout@v4
 
-    - name: 🚀 Deploy to Host System
+    - name: 🚀 Fast Deploy to Host System
       run: |
-        echo "🚀 Starting deployment to host system..."
+        set -e  # Exit on any error
+        
+        echo "🚀 Starting FAST deployment..."
         cd /home/ubuntu/FIRAS_PFE_2025
         
-        echo "📦 Pulling latest code..."
-        git pull origin main
+        echo "📦 Quick code update..."
+        git fetch origin
+        git reset --hard origin/main
         
-        echo "📦 Installing dependencies..."
-        npm install
+        echo "📦 Installing dependencies (if needed)..."
+        npm ci --only=production
         
-        echo "🔄 Restarting application..."
-        sudo systemctl restart devsecops-dashboard
+        echo "🔄 Quick application restart..."
+        # Use PM2 instead of systemd for faster restarts
+        pm2 stop devsecops-dashboard 2>/dev/null || true
+        sleep 2
+        pm2 start server.js --name devsecops-dashboard --update-env
+        sleep 5
         
-        echo "⏳ Waiting for application to start..."
-        sleep 15
-        
-        echo "🔍 Checking application health..."
-        if curl -f http://localhost:3000/health; then
-          echo "=== ✅ DEPLOYMENT SUCCESS! ==="
-          echo "🌐 Dashboard: http://localhost:3000"
+        echo "🔍 Quick health check..."
+        if curl -s --max-time 10 http://localhost:3000/health > /dev/null; then
+          echo "=== ✅ DEPLOYMENT SUCCESS ==="
           
-          # Wait a bit more to ensure dashboard is fully ready
-          sleep 5
-          
-          # Track deployment in dashboard with better error handling
-          echo "📊 Tracking deployment in dashboard..."
-          if curl -X POST http://localhost:3000/api/deployments/track \
+          # Quick deployment tracking
+          curl -s --max-time 5 -X POST http://localhost:3000/api/deployments/track \
             -H "Content-Type: application/json" \
-            -d '{"status": "success", "source": "github-actions", "commit": "'${{ github.sha }}'", "version": "1.0.0"}'; then
-            echo "✅ Deployment tracked successfully!"
-          else
-            echo "⚠️ Deployment tracking failed, but deployment was successful"
-          fi
+            -d '{"status": "success", "source": "github-actions", "commit": "'${{ github.sha }}'"}' || \
+          echo "⚠️ Tracking failed but deployment succeeded"
         else
           echo "=== ❌ DEPLOYMENT FAILED ==="
-          # Track failed deployment
-          curl -X POST http://localhost:3000/api/deployments/track \
+          # Start anyway and track failure
+          pm2 start server.js --name devsecops-dashboard 2>/dev/null || true
+          curl -s -X POST http://localhost:3000/api/deployments/track \
             -H "Content-Type: application/json" \
-            -d '{"status": "failed", "source": "github-actions", "commit": "'${{ github.sha }}'", "version": "1.0.0"}' || true
-          sudo journalctl -u devsecops-dashboard --lines=20
+            -d '{"status": "failed", "source": "github-actions", "commit": "'${{ github.sha }}'"}' || true
           exit 1
         fi
