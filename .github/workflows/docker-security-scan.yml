@@ -23,142 +23,150 @@ jobs:
         sudo trivy image --download-db-only
         echo "✅ Database update completed"
 
-    - name: 🔍 Scan OLD Nginx (Alpine-based)
+    - name: 🔍 Scan VERY OLD Image with Real Vulnerabilities
       run: |
-        echo "🔍 Scanning nginx:1.18-alpine (OLD version with vulnerabilities)..."
+        echo "🔍 Scanning node:8-alpine (VERY OLD with known vulnerabilities)..."
         
-        # Use old nginx version that has vulnerabilities
-        sudo docker pull nginx:1.18-alpine
+        # Use VERY old Node.js version that definitely has vulnerabilities
+        sudo docker pull node:8-alpine
         
-        # Scan and get vulnerability count
-        sudo trivy image --format json nginx:1.18-alpine > scan-original.json
+        # Scan and save proper JSON output
+        sudo trivy image --format json node:8-alpine > scan-original.json 2>&1
         
-        # Count vulnerabilities properly
-        OLD_CRITICAL=$(grep -o '"Severity":"CRITICAL"' scan-original.json | wc -l)
-        OLD_HIGH=$(grep -o '"Severity":"HIGH"' scan-original.json | wc -l)
-        OLD_MEDIUM=$(grep -o '"Severity":"MEDIUM"' scan-original.json | wc -l)
+        # Debug: Check if file has content
+        echo "=== SCAN FILE CONTENT ==="
+        head -5 scan-original.json
+        echo "=== END SCAN FILE ==="
         
-        # Set default values if empty
+        # Count vulnerabilities using proper JSON parsing
+        if [ -s scan-original.json ]; then
+          OLD_CRITICAL=$(python3 -c "import json; data=json.load(open('scan-original.json')); print(sum(1 for r in data.get('Results', []) for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'CRITICAL'))" 2>/dev/null || echo "0")
+          OLD_HIGH=$(python3 -c "import json; data=json.load(open('scan-original.json')); print(sum(1 for r in data.get('Results', []) for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'HIGH'))" 2>/dev/null || echo "0")
+        else
+          OLD_CRITICAL=0
+          OLD_HIGH=0
+        fi
+        
+        # Set safe defaults
         OLD_CRITICAL=${OLD_CRITICAL:-0}
         OLD_HIGH=${OLD_HIGH:-0}
-        OLD_MEDIUM=${OLD_MEDIUM:-0}
         
-        echo "📊 ORIGINAL NGINX:1.18-alpine:"
+        echo "📊 ORIGINAL node:8-alpine:"
         echo "  Critical vulnerabilities: $OLD_CRITICAL"
-        echo "  High vulnerabilities: $OLD_HIGH" 
-        echo "  Medium vulnerabilities: $OLD_MEDIUM"
+        echo "  High vulnerabilities: $OLD_HIGH"
         
-        # Track in dashboard
+        # Track in dashboard with SAFE values
         curl -X POST http://localhost:3000/api/deployments/track \
           -H "Content-Type: application/json" \
-          -d "{\"status\": \"vulnerability-scan\", \"source\": \"security-scan\", \"commit\": \"${{ github.sha }}\", \"vulnerabilities_original\": $OLD_CRITICAL}" || echo "Tracking failed but continuing"
+          -d "{\"status\": \"vulnerability-scan\", \"source\": \"security-scan\", \"commit\": \"scan-start\", \"vulnerabilities_original\": $OLD_CRITICAL}" || echo "Tracking failed but continuing"
 
-    - name: 🛠️ Build Secure Nginx Version
+    - name: 🛠️ Build Secure Version
       run: |
-        echo "🛠️ Building hardened nginx version..."
+        echo "🛠️ Building hardened version..."
         
-        # Create hardened Dockerfile with CORRECT order
+        # Create hardened Dockerfile
         cat > Dockerfile.secure << 'DOCKERFILE'
-        FROM nginx:1.18-alpine
+        FROM node:8-alpine
         
-        # Update ALL packages (Alpine uses apk)
+        # Update ALL packages
         RUN apk update && apk upgrade --no-cache
         
-        # Remove unnecessary packages to reduce attack surface
+        # Remove unnecessary packages
         RUN apk del curl wget 2>/dev/null || echo "Packages not present"
         
-        # Clean up cache AS ROOT (before switching user)
+        # Clean up cache as root
         RUN rm -rf /var/cache/apk/*
         
-        # Use non-root user for security (AFTER cleanup)
+        # Use non-root user
         RUN addgroup -g 1001 -S appuser && \
-            adduser -S appuser -u 1001 -G appuser && \
-            chown -R appuser:appuser /var/cache/nginx
-        
+            adduser -S appuser -u 1001 -G appuser
+            
         # Switch to non-root user
         USER appuser
         DOCKERFILE
         
-        sudo docker build -f Dockerfile.secure -t nginx-secure-$(date +%s) .
-        echo "✅ Hardened nginx image built"
+        sudo docker build -f Dockerfile.secure -t node-secure-$(date +%s) .
+        echo "✅ Hardened image built"
 
-    - name: 🔍 Scan Secure Nginx Image
+    - name: 🔍 Scan Secure Image
       run: |
-        echo "🔍 Scanning the hardened nginx image..."
+        echo "🔍 Scanning the hardened image..."
         
         # Find the secure image
-        SECURE_IMAGE=$(sudo docker images --format "table {{.Repository}}:{{.Tag}}" | grep nginx-secure | head -1)
+        SECURE_IMAGE=$(sudo docker images --format "table {{.Repository}}:{{.Tag}}" | grep node-secure | head -1)
         echo "Scanning: $SECURE_IMAGE"
         
-        sudo trivy image --format json "$SECURE_IMAGE" > scan-secure.json
+        sudo trivy image --format json "$SECURE_IMAGE" > scan-secure.json 2>&1
         
         # Count vulnerabilities in hardened image
-        NEW_CRITICAL=$(grep -o '"Severity":"CRITICAL"' scan-secure.json | wc -l)
-        NEW_HIGH=$(grep -o '"Severity":"HIGH"' scan-secure.json | wc -l)
-        NEW_MEDIUM=$(grep -o '"Severity":"MEDIUM"' scan-secure.json | wc -l)
+        if [ -s scan-secure.json ]; then
+          NEW_CRITICAL=$(python3 -c "import json; data=json.load(open('scan-secure.json')); print(sum(1 for r in data.get('Results', []) for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'CRITICAL'))" 2>/dev/null || echo "0")
+          NEW_HIGH=$(python3 -c "import json; data=json.load(open('scan-secure.json')); print(sum(1 for r in data.get('Results', []) for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'HIGH'))" 2>/dev/null || echo "0")
+        else
+          NEW_CRITICAL=0
+          NEW_HIGH=0
+        fi
         
-        # Set default values
+        # Set safe defaults
         NEW_CRITICAL=${NEW_CRITICAL:-0}
         NEW_HIGH=${NEW_HIGH:-0}
-        NEW_MEDIUM=${NEW_MEDIUM:-0}
         
-        echo "📊 SECURE NGINX IMAGE:"
+        echo "📊 SECURE IMAGE:"
         echo "  Critical vulnerabilities: $NEW_CRITICAL"
         echo "  High vulnerabilities: $NEW_HIGH"
-        echo "  Medium vulnerabilities: $NEW_MEDIUM"
 
     - name: 📊 Show Results
       run: |
         echo "========================================"
-        echo "🎉 NGINX SECURITY SCAN RESULTS"
+        echo "🎉 SECURITY SCAN RESULTS"
         echo "========================================"
-        echo "Image: nginx:1.18-alpine"
+        echo "Image: node:8-alpine"
         echo ""
         echo "🔓 BEFORE HARDENING:"
         echo "  Critical: $OLD_CRITICAL"
         echo "  High: $OLD_HIGH"
-        echo "  Medium: $OLD_MEDIUM"
         echo ""
         echo "🔒 AFTER HARDENING:"
         echo "  Critical: $NEW_CRITICAL"
-        echo "  High: $NEW_HIGH" 
-        echo "  Medium: $NEW_MEDIUM"
+        echo "  High: $NEW_HIGH"
         echo ""
         
         CRITICAL_REDUCTION=$((OLD_CRITICAL - NEW_CRITICAL))
         HIGH_REDUCTION=$((OLD_HIGH - NEW_HIGH))
-        MEDIUM_REDUCTION=$((OLD_MEDIUM - NEW_MEDIUM))
         
         echo "📉 VULNERABILITY REDUCTION:"
         echo "  Critical: -$CRITICAL_REDUCTION"
         echo "  High: -$HIGH_REDUCTION"
-        echo "  Medium: -$MEDIUM_REDUCTION"
         
-        TOTAL_REDUCTION=$((CRITICAL_REDUCTION + HIGH_REDUCTION + MEDIUM_REDUCTION))
+        TOTAL_REDUCTION=$((CRITICAL_REDUCTION + HIGH_REDUCTION))
         
         if [ $TOTAL_REDUCTION -gt 0 ]; then
           echo ""
           echo "✅ SUCCESS: $TOTAL_REDUCTION vulnerabilities fixed!"
-          echo "🔒 Nginx security hardening effective!"
+          echo "🔒 Security hardening effective!"
+        elif [ $OLD_CRITICAL -gt 0 ]; then
+          echo ""
+          echo "⚠️  Vulnerabilities found but no reduction"
+          echo "💡 Package updates might not fix all issues"
         else
           echo ""
-          echo "⚠️  No vulnerability reduction detected"
-          echo "💡 The image might already be updated or scanned without vulnerabilities"
+          echo "❌ NO VULNERABILITIES FOUND"
+          echo "💡 Try different older images"
         fi
         echo "========================================"
         
-        # Track final results with safe values
-        curl -X POST http://localhost:3000/api/deployments/track \
-          -H "Content-Type: application/json" \
-          -d "{\"status\": \"security-scan-complete\", \"source\": \"security-pipeline\", \"commit\": \"${{ github.sha }}\", \"vulnerabilities_before\": $OLD_CRITICAL, \"vulnerabilities_after\": $NEW_CRITICAL, \"reduction\": $CRITICAL_REDUCTION}" || echo "Final tracking failed"
+        # Track final results with SAFE values
+        if [ -n "$OLD_CRITICAL" ] && [ -n "$NEW_CRITICAL" ]; then
+          curl -X POST http://localhost:3000/api/deployments/track \
+            -H "Content-Type: application/json" \
+            -d "{\"status\": \"security-scan-complete\", \"source\": \"security-pipeline\", \"commit\": \"scan-done\", \"vulnerabilities_before\": $OLD_CRITICAL, \"vulnerabilities_after\": $NEW_CRITICAL, \"reduction\": $CRITICAL_REDUCTION}" || echo "Final tracking failed"
+        else
+          echo "Cannot track - vulnerability counts are empty"
+        fi
 
     - name: 🧹 Cleanup
       run: |
-        # Remove scan files
         rm -f scan-original.json scan-secure.json Dockerfile.secure || true
-        
-        # Remove Docker images to save space
-        sudo docker rmi -f $(sudo docker images -q nginx-secure-*) 2>/dev/null || true
-        sudo docker rmi nginx:1.18-alpine 2>/dev/null || true
-        
+        sudo docker rmi -f $(sudo docker images -q node-secure-*) 2>/dev/null || true
+        sudo docker rmi node:8-alpine 2>/dev/null || true
         echo "🧹 Cleanup completed"
