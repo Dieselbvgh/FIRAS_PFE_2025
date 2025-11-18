@@ -7,71 +7,46 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    name: 🧪 Tests
     steps:
     - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with:
-        node-version: '18.x'
-    - run: npm ci
     - run: node -c server.js && echo "✅ Server syntax OK"
-    - run: |
-        test -f server.js && echo "✅ server.js exists"
-        test -f package.json && echo "✅ package.json exists"
 
   deploy:
     runs-on: ubuntu-latest
-    name: 🚀 Deploy via Webhook
     needs: test
-    if: github.ref == 'refs/heads/main'
-    
-    environment: production
-    
     steps:
-    - name: Trigger Deployment Webhook
-      run: |
-        curl -X POST \
-          http://${{ secrets.SERVER_HOST }}:5001/api/deploy \
-          -H "Content-Type: application/json" \
-          -d '{"secret":"${{ secrets.DEPLOY_SECRET }}"}' \
-          --max-time 10 \
-          --retry 2 \
-          --retry-delay 5 || echo "⚠️ Webhook call completed (deployment in progress)"
-
-    - name: Wait for Deployment
-      run: |
-        echo "⏳ Waiting for deployment to complete..."
-        sleep 30
-
-    - name: Verify Deployment
-      run: |
-        echo "🧪 Verifying deployment..."
-        for i in {1..10}; do
-          if curl -f http://${{ secrets.SERVER_HOST }}:5001/health; then
-            echo "✅ DEPLOYMENT SUCCESS!"
-            echo "🌐 Dashboard: http://${{ secrets.SERVER_HOST }}:5001"
-            exit 0
+    - uses: actions/checkout@v4
+    - name: 🚀 Deploy via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        script: |
+          echo "=== 🚀 STARTING DEPLOYMENT ==="
+          cd ~/FIRAS_PFE_2025
+          
+          echo "📥 Pulling latest code..."
+          git pull origin main
+          
+          echo "📦 Installing dependencies..."
+          npm install
+          
+          echo "🔄 Restarting application with PM2..."
+          pm2 reload devsecops-dashboard --update-env
+          
+          echo "⏳ Waiting for restart..."
+          sleep 8
+          
+          echo "🔍 Checking application status..."
+          if curl -f http://localhost:3000/health; then
+            echo "=== ✅ DEPLOYMENT SUCCESS! ==="
+            echo "🌐 Dashboard: http://localhost:3000"
+            echo "📊 PM2 Status:"
+            pm2 status
+          else
+            echo "=== ❌ DEPLOYMENT FAILED ==="
+            echo "📋 Checking PM2 logs..."
+            pm2 logs --lines 10
+            exit 1
           fi
-          echo "⏰ Waiting... ($i/10)"
-          sleep 5
-        done
-        echo "❌ Deployment verification failed"
-        exit 1
-
-  notify:
-    runs-on: ubuntu-latest
-    name: 📢 Status
-    needs: deploy
-    if: always()
-    steps:
-    - name: Show Result
-      run: |
-        echo "🏁 DEPLOYMENT RESULT: ${{ needs.deploy.result }}"
-        if [ "${{ needs.deploy.result }}" == "success" ]; then
-          echo "🎉 SUCCESS! Auto-deployment working!"
-          echo "🔗 http://${{ secrets.SERVER_HOST }}:5001"
-          echo "🚀 Your CI/CD pipeline is now PRODUCTION READY!"
-        else
-          echo "❌ Deployment failed"
-          echo "🔧 Check network connectivity"
-        fi
