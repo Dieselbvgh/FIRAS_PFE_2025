@@ -569,6 +569,66 @@ app.get('/', (req, res) => {
         }
     });
 });
+// ----------------- Real Deployment Tracking -----------------
+const deploymentHistory = [];
+
+// Track deployment
+app.post('/api/deployment/status', (req, res) => {
+    const { status, version, commit, timestamp } = req.body;
+    
+    const deployment = {
+        id: `deploy-${Date.now()}`,
+        status: status || 'deployed',
+        version: version || '1.0.0',
+        commit: commit || 'unknown',
+        timestamp: timestamp || new Date().toISOString(),
+        real: true
+    };
+    
+    deploymentHistory.unshift(deployment);
+    
+    // Keep only last 10 deployments
+    if (deploymentHistory.length > 10) {
+        deploymentHistory.pop();
+    }
+    
+    res.json({ ok: true, deployment });
+});
+
+// Get latest deployment status
+app.get('/api/deployment/status', (req, res) => {
+    const latest = deploymentHistory[0] || null;
+    res.json({ 
+        ok: true, 
+        latest,
+        totalDeployments: deploymentHistory.length 
+    });
+});
+
+// Auto-track deployments from CI/CD
+app.post('/api/deployment/ci-cd', (req, res) => {
+    const commitHash = require('child_process').execSync('git rev-parse --short HEAD').toString().trim();
+    
+    const deployment = {
+        id: `ci-cd-${Date.now()}`,
+        status: 'deployed',
+        version: process.env.npm_package_version || '1.0.0',
+        commit: commitHash,
+        timestamp: new Date().toISOString(),
+        source: 'ci-cd',
+        real: true
+    };
+    
+    deploymentHistory.unshift(deployment);
+    
+    // Keep only last 10 deployments
+    if (deploymentHistory.length > 10) {
+        deploymentHistory.pop();
+    }
+    
+    res.json({ ok: true, deployment });
+    console.log(`✅ Real deployment tracked: ${commitHash}`);
+});
 
 // ==================== SERVER START ====================
 
