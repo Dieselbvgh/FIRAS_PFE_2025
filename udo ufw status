@@ -1,0 +1,36 @@
+[0;1;32m●[0m ssh.service - OpenBSD Secure Shell server
+     Loaded: loaded (/lib/systemd/system/ssh.service; enabled; vendor preset: enabled)
+     Active: [0;1;32mactive (running)[0m since Mon 2025-11-17 03:36:31 EST; 1 day 1h ago
+       Docs: man:sshd(8)
+             man:sshd_config(5)
+   Main PID: 1015 (sshd)
+      Tasks: 1 (limit: 15819)
+     Memory: 2.2M
+     CGroup: /system.slice/ssh.service
+             └─1015 sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups
+
+Nov 17 03:36:31 ubuntu2004 systemd[1]: Starting OpenBSD Secure Shell server...
+Nov 17 03:36:31 ubuntu2004 sshd[1015]: Server listening on 0.0.0.0 port 22.
+Nov 17 03:36:31 ubuntu2004 sshd[1015]: Server listening on :: port 22.
+Nov 17 03:36:31 ubuntu2004 systemd[1]: Started OpenBSD Secure Shell server.
+Nov 18 05:12:51 ubuntu2004 sshd[39241]: Accepted publickey for ubuntu from 127.0.0.1 port 57658 ssh2: RSA SHA256:j7TDJpG4asbJ28zv7jlcErJovn4cCSpqI5VJblBl8M0
+Nov 18 05:12:51 ubuntu2004 sshd[39241]: pam_unix(sshd:session): session opened for user ubuntu by (uid=0)
+Nov 18 05:12:52 ubuntu2004 sshd[39241]: pam_unix(sshd:session): session closed for user ubuntu
+[0;1;32m●[0m ssh.service - OpenBSD Secure Shell server
+     Loaded: loaded (/lib/systemd/system/ssh.service; enabled; vendor preset: enabled)
+     Active: [0;1;32mactive (running)[0m since Mon 2025-11-17 03:36:31 EST; 1 day 2h ago
+       Docs: man:sshd(8)
+             man:sshd_config(5)
+   Main PID: 1015 (sshd)
+      Tasks: 1 (limit: 15819)
+     Memory: 2.2M
+     CGroup: /system.slice/ssh.service
+             └─1015 sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups
+
+Nov 17 03:36:31 ubuntu2004 systemd[1]: Starting OpenBSD Secure Shell server...
+Nov 17 03:36:31 ubuntu2004 sshd[1015]: Server listening on 0.0.0.0 port 22.
+Nov 17 03:36:31 ubuntu2004 sshd[1015]: Server listening on :: port 22.
+Nov 17 03:36:31 ubuntu2004 systemd[1]: Started OpenBSD Secure Shell server.
+Nov 18 05:12:51 ubuntu2004 sshd[39241]: Accepted publickey for ubuntu from 127.0.0.1 port 57658 ssh2: RSA SHA256:j7TDJpG4asbJ28zv7jlcErJovn4cCSpqI5VJblBl8M0
+Nov 18 05:12:51 ubuntu2004 sshd[39241]: pam_unix(sshd:session): session opened for user ubuntu by (uid=0)
+Nov 18 05:12:52 ubuntu2004 sshd[39241]: pam_unix(sshd:session): session closed for user ubuntu
