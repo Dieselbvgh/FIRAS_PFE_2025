@@ -34,9 +34,11 @@ if curl -f http://localhost:3000/health > /dev/null 2>&1; then
     echo "✅ Deployment completed successfully at $(date)"
     
     # Register REAL deployment with the server
+    echo "📝 Registering real deployment..."
     curl -X POST http://localhost:3000/api/deployment/ci-cd \
         -H "Content-Type: application/json" \
         -d "{\"status\":\"deployed\",\"commit\":\"$COMMIT_HASH\",\"version\":\"$VERSION\"}" \
+        && echo "✅ Real deployment registered!" \
         || echo "⚠️ Could not register deployment"
     
     echo "🌐 Application is running at: http://localhost:3000"
@@ -44,21 +46,5 @@ if curl -f http://localhost:3000/health > /dev/null 2>&1; then
     pm2 status
 else
     echo "❌ Deployment failed - application not responding"
-    echo "🔄 Attempting manual start..."
-    PORT=3000 node server.js &
-    sleep 5
-    
-    if curl -f http://localhost:3000/health > /dev/null 2>&1; then
-        echo "✅ Manual start successful"
-        # Register deployment
-        curl -X POST http://localhost:3000/api/deployment/ci-cd \
-            -H "Content-Type: application/json" \
-            -d "{\"status\":\"deployed\",\"commit\":\"$COMMIT_HASH\",\"version\":\"$VERSION\"}" \
-            || echo "⚠️ Could not register deployment"
-    else
-        echo "💥 Manual start also failed"
-        echo "📋 Check server status:"
-        ps aux | grep node
-        exit 1
-    fi
+    exit 1
 fi
