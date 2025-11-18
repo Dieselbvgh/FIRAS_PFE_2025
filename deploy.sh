@@ -1,41 +1,34 @@
 #!/bin/bash
-echo "🚀 Deploying Firas PFE 2025 Dashboard..."
+echo "🚀 Starting deployment at $(date)"
 
-# Check if Node.js is installed
-if ! command -v node &> /dev/null; then
-    echo "❌ Node.js is not installed. Please install Node.js first."
-    exit 1
-fi
+cd /home/ubuntu/FIRAS_PFE_2025
+
+# Pull latest code
+echo "📥 Pulling latest code..."
+git pull origin main
 
 # Install dependencies
 echo "📦 Installing dependencies..."
 npm install
 
-# Create necessary directories
-mkdir -p data logs
+# Restart with PM2 (this is the proper way - no killing needed)
+echo "🔄 Restarting application with PM2..."
+PORT=3000 pm2 reload devsecops-dashboard --update-env
 
-# Check if trivy is installed
-if ! command -v trivy &> /dev/null; then
-    echo "⚠️  Trivy is not installed. Docker scanning will not work."
-    echo "   Install with: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin"
+# Wait for restart
+echo "⏳ Waiting for application to restart..."
+sleep 8
+
+# Check if application is running
+echo "🔍 Checking application status..."
+if curl -f http://localhost:3000/health > /dev/null 2>&1; then
+    echo "✅ Deployment completed successfully at $(date)"
+    echo "🌐 Application is running at: http://localhost:3000"
+    echo "📊 PM2 Status:"
+    pm2 status
+else
+    echo "❌ Deployment failed - application not responding"
+    echo "📋 PM2 logs:"
+    pm2 logs --lines 10
+    exit 1
 fi
-
-# Check if grype is installed
-if ! command -v grype &> /dev/null; then
-    echo "⚠️  Grype is not installed. Docker scanning will not work."
-    echo "   Install with: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin"
-fi
-
-# Check if docker is installed
-if ! command -v docker &> /dev/null; then
-    echo "⚠️  Docker is not installed. Auto-fix features will not work."
-fi
-
-echo "✅ Setup complete!"
-echo "🎯 To start the dashboard:"
-echo "   npm start"
-echo "   Then open: http://localhost:5001"
-echo ""
-echo "🔧 Configuration:"
-echo "   Edit .env to enable real fixes: ENABLE_REAL_FIX=true"
-echo "   (Requires sudo for some operations)"
