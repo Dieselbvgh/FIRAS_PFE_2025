@@ -34,7 +34,7 @@ jobs:
         test -f public/index.html && echo "✅ index.html exists"
         test -f public/js/dashboard.js && echo "✅ dashboard.js exists"
         test -f public/css/style.css && echo "✅ style.css exists"
-        echo "✅ All files verified!"
+        echo "✅ All essential files verified!"
 
   build:
     runs-on: ubuntu-latest
@@ -71,9 +71,18 @@ jobs:
     - name: Create deployment package
       run: |
         mkdir -p deployment
-        cp -r server.js package.json public .github workflows data logs .env.example deployment/
+        echo "📦 Creating deployment package..."
+        # Copy essential files
+        cp -r server.js package.json public deployment/
+        
+        # Copy optional files if they exist
+        test -d data && cp -r data deployment/ || echo "⚠️ data directory not found"
+        test -d logs && cp -r logs deployment/ || echo "⚠️ logs directory not found"
+        test -f .env.example && cp .env.example deployment/ || echo "⚠️ .env.example not found"
+        test -d .github && cp -r .github deployment/ || echo "⚠️ .github directory not found"
+        
         cd deployment
-        echo "📦 Deployment package created with:"
+        echo "📦 Deployment package contents:"
         ls -la
         tar -czf ../devsecops-dashboard.tar.gz .
         echo "✅ Package created: devsecops-dashboard.tar.gz"
@@ -93,3 +102,5 @@ jobs:
         echo "1. SERVER_HOST - Your server IP"
         echo "2. SERVER_USER - Your server username"
         echo "3. SERVER_SSH_KEY - Your SSH private key"
+        echo ""
+        echo "📊 Pipeline Status: ✅ SUCCESS"
