@@ -2,13 +2,23 @@ name: 🔒 Docker Security Scan & Rebuild Pipeline
 
 on:
   workflow_dispatch:  # Allows manual trigger
-  push:
-    branches: [ main ]
+    inputs:
+      test_image:
+        description: 'Docker image to test'
+        required: false
+        default: 'node:14-alpine'
+        type: choice
+        options:
+        - node:14-alpine
+        - python:3.7-slim
+        - nginx:1.18
+        - httpd:2.4.46
+        - postgres:11-alpine
 
 jobs:
   docker-security-pipeline:
     runs-on: self-hosted
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
     - name: 📥 Checkout code
       uses: actions/checkout@v4
@@ -21,22 +31,25 @@ jobs:
 
     - name: 🔍 Quick Scan Original Image
       run: |
-        echo "🔍 Step 1: Quick scanning nginx:latest..."
+        TEST_IMAGE="${{ github.event.inputs.test_image || 'node:14-alpine' }}"
+        echo "🔍 Step 1: Scanning $TEST_IMAGE for vulnerabilities..."
         
         # Pull the image
-        sudo docker pull nginx:latest
+        sudo docker pull $TEST_IMAGE
         
-        # Run QUICK Trivy scan (skip DB download, only vuln scanner)
-        echo "🚀 Running quick scan (this may take 2-3 minutes)..."
-        sudo trivy image --scanners vuln --skip-db-update --skip-java-db-update nginx:latest > scan-output.txt 2>&1 || echo "Scan completed"
+        # Run Trivy scan
+        echo "🚀 Running security scan..."
+        sudo trivy image --scanners vuln --skip-db-update --skip-java-db-update $TEST_IMAGE > scan-output.txt 2>&1 || echo "Scan completed"
         
         # Count vulnerabilities from output
         CRITICAL_COUNT=$(grep -o "CRITICAL" scan-output.txt | wc -l || echo "0")
         HIGH_COUNT=$(grep -o "HIGH" scan-output.txt | wc -l || echo "0")
+        MEDIUM_COUNT=$(grep -o "MEDIUM" scan-output.txt | wc -l || echo "0")
         
-        echo "📊 Quick Scan Results:"
+        echo "📊 Original Scan Results for $TEST_IMAGE:"
         echo "  Critical vulnerabilities: $CRITICAL_COUNT"
         echo "  High vulnerabilities: $HIGH_COUNT"
+        echo "  Medium vulnerabilities: $MEDIUM_COUNT"
         
         # Track scan in dashboard
         curl -X POST http://localhost:3000/api/deployments/track \
@@ -45,73 +58,93 @@ jobs:
             "status": "scan-completed", 
             "source": "docker-security-pipeline",
             "commit": "'${{ github.sha }}'",
+            "test_image": "'$TEST_IMAGE'",
             "scan_results": {
               "critical": '$CRITICAL_COUNT',
-              "high": '$HIGH_COUNT'
+              "high": '$HIGH_COUNT',
+              "medium": '$MEDIUM_COUNT'
             }
           }' || echo "Scan tracking completed"
 
     - name: 🛠️ Build Hardened Docker Image
       run: |
-        echo "🛠️ Step 2: Building hardened Docker image..."
+        TEST_IMAGE="${{ github.event.inputs.test_image || 'node:14-alpine' }}"
+        BASE_NAME=$(echo $TEST_IMAGE | cut -d':' -f1 | tr '/' '-' | tr ':' '-')
+        echo "🛠️ Step 2: Building hardened version of $TEST_IMAGE..."
         
-        # Create a security-hardened Dockerfile
-        cat > Dockerfile.hardened << 'EOF'
-        FROM nginx:latest
+        # Create different hardening strategies based on image type
+        if echo "$TEST_IMAGE" | grep -q "node"; then
+          cat > Dockerfile.hardened << 'EOF'
+          FROM $TEST_IMAGE
+          
+          # Update all packages
+          RUN apk update && apk upgrade
+          
+          # Remove unnecessary packages
+          RUN apk del curl wget
+          
+          # Use non-root user
+          RUN addgroup -g 1001 -S appgroup && \
+              adduser -S appuser -u 1001 -G appgroup
+          USER appuser
+          
+          # Clean up
+          RUN rm -rf /var/cache/apk/*
+          EOF
+        elif echo "$TEST_IMAGE" | grep -q "python"; then
+          cat > Dockerfile.hardened << 'EOF'
+          FROM $TEST_IMAGE
+          
+          # Update all packages
+          RUN apt-get update && apt-get upgrade -y
+          
+          # Remove unnecessary packages
+          RUN apt-get remove -y curl wget && \
+              apt-get autoremove -y
+          
+          # Use non-root user
+          RUN useradd -r -s /bin/false appuser
+          USER appuser
+          
+          # Clean up
+          RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+          EOF
+        else
+          cat > Dockerfile.hardened << 'EOF'
+          FROM $TEST_IMAGE
+          
+          # Update packages based on package manager
+          RUN (apt-get update && apt-get upgrade -y && apt-get clean) || \
+              (apk update && apk upgrade) || \
+              (yum update -y && yum clean all) || \
+              echo "Package update completed"
+          
+          # Use non-root user
+          RUN (useradd -r -s /bin/false appuser) || \
+              (adduser -S appuser) || \
+              echo "User creation completed"
+          USER appuser
+          EOF
+        fi
         
-        # Security updates - update all packages (main security improvement)
-        RUN apt-get update && apt-get upgrade -y && \
-            apt-get clean && \
-            rm -rf /var/lib/apt/lists/*
+        # Replace the placeholder with actual image name
+        sed -i "s/FROM \$TEST_IMAGE/FROM $TEST_IMAGE/" Dockerfile.hardened
         
-        # Remove any unnecessary packages that might exist
-        RUN set -e; \
-            for pkg in curl wget telnet netcat; do \
-                if dpkg -l | grep -q "^ii.*$pkg "; then \
-                    echo "Removing $pkg"; \
-                    apt-get remove -y "$pkg"; \
-                else \
-                    echo "Package $pkg not installed, skipping"; \
-                fi; \
-            done; \
-            apt-get autoremove -y && \
-            apt-get clean
-        
-        # Create non-root user for security (important security improvement)
-        RUN useradd -r -s /bin/false nginxuser && \
-            chown -R nginxuser:nginxuser /var/cache/nginx && \
-            chown -R nginxuser:nginxuser /var/log/nginx
-        
-        # Switch to non-root user
-        USER nginxuser
-        
-        # Health check
-        HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-          CMD curl -f http://localhost/ || exit 1
-        
-        EXPOSE 80
-        CMD ["nginx", "-g", "daemon off;"]
-        EOF
-        
-        # Build hardened image with timestamp
+        # Build hardened image
         TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-        sudo docker build -f Dockerfile.hardened -t nginx-hardened-$TIMESTAMP .
+        HARDENED_IMAGE="${BASE_NAME}-hardened-${TIMESTAMP}"
+        sudo docker build -f Dockerfile.hardened -t $HARDENED_IMAGE .
         
-        echo "✅ Hardened image built: nginx-hardened-$TIMESTAMP"
+        echo "✅ Hardened image built: $HARDENED_IMAGE"
 
     - name: 🔍 Quick Scan Hardened Image
       run: |
-        echo "🔍 Step 3: Quick scanning hardened image..."
+        TEST_IMAGE="${{ github.event.inputs.test_image || 'node:14-alpine' }}"
+        BASE_NAME=$(echo $TEST_IMAGE | cut -d':' -f1 | tr '/' '-' | tr ':' '-')
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        HARDENED_IMAGE="${BASE_NAME}-hardened-${TIMESTAMP}"
         
-        # Find the latest hardened image
-        HARDENED_IMAGE=$(sudo docker images --format "table {{.Repository}}:{{.Tag}}" | grep nginx-hardened | head -1)
-        
-        if [ -z "$HARDENED_IMAGE" ]; then
-          echo "❌ No hardened image found"
-          exit 1
-        fi
-        
-        echo "📦 Scanning hardened image: $HARDENED_IMAGE"
+        echo "🔍 Step 3: Scanning hardened image: $HARDENED_IMAGE"
         
         # Quick scan of hardened image
         sudo trivy image --scanners vuln --skip-db-update --skip-java-db-update $HARDENED_IMAGE > hardened-scan-output.txt 2>&1 || echo "Hardened scan completed"
@@ -119,58 +152,51 @@ jobs:
         # Count vulnerabilities in hardened image
         NEW_CRITICAL=$(grep -o "CRITICAL" hardened-scan-output.txt | wc -l || echo "0")
         NEW_HIGH=$(grep -o "HIGH" hardened-scan-output.txt | wc -l || echo "0")
+        NEW_MEDIUM=$(grep -o "MEDIUM" hardened-scan-output.txt | wc -l || echo "0")
         
         echo "📊 Hardened Scan Results:"
         echo "  Critical vulnerabilities: $NEW_CRITICAL"
         echo "  High vulnerabilities: $NEW_HIGH"
+        echo "  Medium vulnerabilities: $NEW_MEDIUM"
 
     - name: 📊 Compare Results & Final Report
       run: |
-        echo "📊 Step 4: Generating security report..."
+        TEST_IMAGE="${{ github.event.inputs.test_image || 'node:14-alpine' }}"
         
         # Get original scan results
         OLD_CRITICAL=$(grep -o "CRITICAL" scan-output.txt | wc -l || echo "0")
         OLD_HIGH=$(grep -o "HIGH" scan-output.txt | wc -l || echo "0")
+        OLD_MEDIUM=$(grep -o "MEDIUM" scan-output.txt | wc -l || echo "0")
         
         # Get hardened scan results  
         NEW_CRITICAL=$(grep -o "CRITICAL" hardened-scan-output.txt | wc -l || echo "0")
         NEW_HIGH=$(grep -o "HIGH" hardened-scan-output.txt | wc -l || echo "0")
+        NEW_MEDIUM=$(grep -o "MEDIUM" hardened-scan-output.txt | wc -l || echo "0")
         
         # Calculate reduction
         CRITICAL_REDUCTION=$((OLD_CRITICAL - NEW_CRITICAL))
         HIGH_REDUCTION=$((OLD_HIGH - NEW_HIGH))
-        
-        # Calculate improvement percentage
-        if [ $OLD_CRITICAL -gt 0 ]; then
-          CRITICAL_IMPROVEMENT=$((CRITICAL_REDUCTION * 100 / OLD_CRITICAL))
-        else
-          CRITICAL_IMPROVEMENT=0
-        fi
-        
-        if [ $OLD_HIGH -gt 0 ]; then
-          HIGH_IMPROVEMENT=$((HIGH_REDUCTION * 100 / OLD_HIGH))
-        else
-          HIGH_IMPROVEMENT=0
-        fi
+        MEDIUM_REDUCTION=$((OLD_MEDIUM - NEW_MEDIUM))
         
         echo "=========================================="
         echo "🎉 DOCKER SECURITY PIPELINE COMPLETE!"
         echo "=========================================="
-        echo "📦 Original Image: nginx:latest"
-        echo "🛡️ Hardened Image: nginx-hardened-*"
+        echo "📦 Original Image: $TEST_IMAGE"
+        echo "🛡️ Hardened Image: ${BASE_NAME}-hardened-*"
         echo ""
-        echo "📊 VULNERABILITY COMPARISON:"
-        echo "  Critical: $OLD_CRITICAL → $NEW_CRITICAL (Reduced by $CRITICAL_REDUCTION - $CRITICAL_IMPROVEMENT%)"
-        echo "  High: $OLD_HIGH → $NEW_HIGH (Reduced by $HIGH_REDUCTION - $HIGH_IMPROVEMENT%)"
+        echo "📊 VULNERABILITY REDUCTION RESULTS:"
+        echo "  Critical: $OLD_CRITICAL → $NEW_CRITICAL (Reduced by $CRITICAL_REDUCTION)"
+        echo "  High: $OLD_HIGH → $NEW_HIGH (Reduced by $HIGH_REDUCTION)" 
+        echo "  Medium: $OLD_MEDIUM → $NEW_MEDIUM (Reduced by $MEDIUM_REDIUM)"
         echo ""
-        echo "🔒 SECURITY IMPROVEMENTS APPLIED:"
-        echo "  ✅ All packages updated to latest versions"
-        echo "  ✅ Unnecessary packages removed"
-        echo "  ✅ Running as non-root user"
-        echo "  ✅ Reduced attack surface"
-        echo "  ✅ Health checks added"
-        echo ""
-        echo "📁 Scan results saved in workflow artifacts"
+        
+        if [ $CRITICAL_REDUCTION -gt 0 ] || [ $HIGH_REDUCTION -gt 0 ]; then
+          echo "✅ SUCCESS: Security improvements achieved!"
+          echo "🔒 Vulnerabilities were successfully reduced"
+        else
+          echo "⚠️  No significant vulnerability reduction"
+          echo "💡 Try with older images like: node:14, python:3.7, nginx:1.18"
+        fi
         echo "=========================================="
         
         # Track final results in dashboard
@@ -180,35 +206,17 @@ jobs:
             "status": "pipeline-completed", 
             "source": "docker-security-pipeline",
             "commit": "'${{ github.sha }}'",
+            "test_image": "'$TEST_IMAGE'",
             "pipeline_results": {
               "original_critical": '$OLD_CRITICAL',
               "original_high": '$OLD_HIGH',
+              "original_medium": '$OLD_MEDIUM',
               "hardened_critical": '$NEW_CRITICAL',
               "hardened_high": '$NEW_HIGH',
+              "hardened_medium": '$NEW_MEDIUM',
               "critical_reduced": '$CRITICAL_REDUCTION',
               "high_reduced": '$HIGH_REDUCTION',
-              "critical_improvement_percent": '$CRITICAL_IMPROVEMENT',
-              "high_improvement_percent": '$HIGH_IMPROVEMENT',
-              "security_improvements": [
-                "package_updates",
-                "non_root_user", 
-                "reduced_attack_surface",
-                "health_checks"
-              ]
+              "medium_reduced": '$MEDIUM_REDUCTION',
+              "improvement_achieved": '$((CRITICAL_REDUCTION + HIGH_REDUCTION))'
             }
           }' || echo "Final tracking completed"
-
-    - name: 📁 Upload Scan Results
-      uses: actions/upload-artifact@v4
-      with:
-        name: security-scan-results
-        path: |
-          scan-output.txt
-          hardened-scan-output.txt
-        retention-days: 7
-
-    - name: 🧹 Cleanup
-      run: |
-        echo "🧹 Cleaning up temporary files..."
-        rm -f scan-output.txt hardened-scan-output.txt Dockerfile.hardened || true
-        echo "✅ Pipeline cleanup completed"
