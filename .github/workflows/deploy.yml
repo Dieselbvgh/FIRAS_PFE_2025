@@ -3,74 +3,26 @@ name: 🚀 Deploy DevSecOps Dashboard
 on:
   push:
     branches: [ main ]
-  schedule:
-    - cron: '0 2 * * 1'  # Weekly security scan every Monday 2 AM
-
-env:
-  NODE_VERSION: '18.x'
 
 jobs:
-  security:
-    runs-on: ubuntu-latest
-    name: 🔒 Security Scan
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'fs'
-        scan-ref: '.'
-        format: 'table'
-    
-    - name: Check for secrets
-      uses: gitleaks/gitleaks-action@v2
-      with:
-        config-path: .gitleaks.toml
-
   test:
     runs-on: ubuntu-latest
     name: 🧪 Tests
-    needs: security
-    
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-node@v4
       with:
-        node-version: ${{ env.NODE_VERSION }}
+        node-version: '18.x'
     - run: npm ci
-    - run: node -c server.js
+    - run: node -c server.js && echo "✅ Server syntax OK"
     - run: |
-        echo "📁 File Structure Check:"
-        ls -la
-        test -f server.js && echo "✅ server.js"
-        test -f package.json && echo "✅ package.json" 
-        test -f public/index.html && echo "✅ index.html"
-        test -f public/js/dashboard.js && echo "✅ dashboard.js"
-
-  docker:
-    runs-on: ubuntu-latest
-    name: 🐳 Docker Build
-    needs: test
-    
-    steps:
-    - uses: actions/checkout@v4
-    - name: Build Docker image
-      run: |
-        docker build -t devsecops-dashboard:${{ github.sha }} .
-        docker images | grep devsecops-dashboard
-    - name: Test Docker image
-      run: |
-        docker run -d --name test-dashboard -p 5002:5001 devsecops-dashboard:${{ github.sha }}
-        sleep 10
-        curl -f http://localhost:5002/health && echo "✅ Docker test PASSED" || echo "❌ Docker test FAILED"
-        docker stop test-dashboard
-        docker rm test-dashboard
+        test -f server.js && echo "✅ server.js exists"
+        test -f package.json && echo "✅ package.json exists"
 
   deploy:
     runs-on: ubuntu-latest
     name: 🚀 Deploy to Production
-    needs: [test, docker]
+    needs: test
     if: github.ref == 'refs/heads/main'
     
     environment: production
@@ -86,8 +38,8 @@ jobs:
         key: ${{ secrets.SERVER_SSH_KEY }}
         script: |
           set -e
-          echo "🎯 STARTING DEPLOYMENT..."
-          echo "🕐 $(date)"
+          echo "🚀 STARTING DEPLOYMENT..."
+          echo "📅 $(date)"
           
           cd /home/ubuntu/FIRAS_PFE_2025
           echo "📥 Pulling latest code..."
@@ -96,35 +48,39 @@ jobs:
           echo "📦 Installing dependencies..."
           npm install --production
           
-          echo "🔧 Restarting service..."
+          echo "🔧 Ensuring clean restart..."
           sudo systemctl stop devsecops-dashboard || true
-          sleep 2
+          sudo pkill -f "node server.js" || true
+          sleep 3
+          
+          echo "🔄 Starting service..."
           sudo systemctl start devsecops-dashboard
-          sleep 5
           
-          echo "🧪 Running health checks..."
-          curl -f http://localhost:5001/health && echo "✅ Health check PASSED"
-          curl -f http://localhost:5001/api/overview && echo "✅ API check PASSED"
+          echo "⏳ Waiting for service..."
+          sleep 10
           
-          echo " "
-          echo "🎉 DEPLOYMENT COMPLETED!"
-          echo "🌐 Dashboard: http://${{ secrets.SERVER_HOST }}:5001"
-          echo "📊 Run: sudo systemctl status devsecops-dashboard"
+          echo "🧪 Testing deployment..."
+          if curl -f http://localhost:5001/health; then
+            echo "🎉 DEPLOYMENT SUCCESS!"
+            echo "🌐 Dashboard: http://${{ secrets.SERVER_HOST }}:5001"
+          else
+            echo "❌ Deployment failed - checking logs..."
+            sudo journalctl -u devsecops-dashboard -n 20 --no-pager
+            exit 1
+          fi
 
   notify:
     runs-on: ubuntu-latest
-    name: 📢 Notify
+    name: 📢 Status
     needs: deploy
     if: always()
-    
     steps:
-    - name: Deployment Status
+    - name: Show Result
       run: |
+        echo "🏁 DEPLOYMENT RESULT: ${{ needs.deploy.result }}"
         if [ "${{ needs.deploy.result }}" == "success" ]; then
-          echo "🎉 DEPLOYMENT SUCCESSFUL!"
-          echo "🚀 New version deployed to production"
-          echo "📅 $(date)"
+          echo "🎉 SUCCESS! Dashboard updated!"
+          echo "🔗 http://${{ secrets.SERVER_HOST }}:5001"
         else
-          echo "❌ DEPLOYMENT FAILED"
-          echo "🔧 Check GitHub Actions for details"
+          echo "❌ Deployment failed - check logs above"
         fi

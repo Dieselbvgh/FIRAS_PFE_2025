@@ -5,8 +5,6 @@
  * - DevSecOps auto-fix (real only if ENABLE_REAL_FIX=true)
  * - Alerts store with mitigation endpoint
  * - Chat endpoint (rule-based)
- *
- * Notes: Real fixes require sudo for some commands. Enable ENABLE_REAL_FIX=true in .env
  * only after you review and accept the mitigation steps.
  */
 

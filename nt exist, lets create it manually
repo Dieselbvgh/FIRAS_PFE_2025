@@ -1,0 +1,8 @@
+● devsecops-dashboard.service - DevSecOps Dashboard
+     Loaded: loaded (/etc/systemd/system/devsecops-dashboard.service; enabled; vendor preset: enabled)
+     Active: activating (auto-restart) (Result: exit-code) since Tue 2025-11-18 05:27:21 EST; 8s ago
+    Process: 40432 ExecStart=/usr/bin/node server.js [0;1;31m(code=exited, status=1/FAILURE)[0m
+   Main PID: 40432 (code=exited, status=1/FAILURE)
+
+Nov 18 05:27:21 ubuntu2004 systemd[1]: [0;1;39m[0;1;31m[0;1;39mdevsecops-dashboard.service: Main process exited, code=exited, status=1/FAILURE[0m
+Nov 18 05:27:21 ubuntu2004 systemd[1]: [0;1;38;5;185m[0;1;39m[0;1;38;5;185mdevsecops-dashboard.service: Failed with result 'exit-code'.[0m
