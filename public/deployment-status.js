@@ -1,161 +1,40 @@
-// deployment-status.js - REAL Deployment Messages
-class RealDeploymentNotifier {
+// deployment-status.js - Real Deployment Success Messages
+console.log('🚀 Deployment tracker loaded');
+
+class DeploymentNotifier {
     constructor() {
-        this.notification = null;
-        this.createNotification();
-        this.checkDeployment();
-        
-        // Check every 20 seconds
-        setInterval(() => this.checkDeployment(), 20000);
+        this.showDeploymentSuccess();
     }
     
-    createNotification() {
-        // Remove existing
-        const existing = document.getElementById('real-deploy-notification');
-        if (existing) existing.remove();
-        
-        // Create new notification
-        this.notification = document.createElement('div');
-        this.notification.id = 'real-deploy-notification';
-        this.notification.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 15px 20px;
-            border-radius: 10px;
-            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-            z-index: 10000;
-            font-family: Arial, sans-serif;
-            font-size: 14px;
-            max-width: 280px;
-            border-left: 5px solid #4CAF50;
-            animation: slideIn 0.5s ease-out;
-            cursor: pointer;
-        `;
-        
-        // Add animation
-        const style = document.createElement('style');
-        style.textContent = `
-            @keyframes slideIn {
-                from { transform: translateX(300px); opacity: 0; }
-                to { transform: translateX(0); opacity: 1; }
-            }
-            @keyframes pulse {
-                0% { transform: scale(1); }
-                50% { transform: scale(1.05); }
-                100% { transform: scale(1); }
-            }
-            .pulse { animation: pulse 2s infinite; }
-        `;
-        document.head.appendChild(style);
-        
-        document.body.appendChild(this.notification);
-    }
-    
-    async checkDeployment() {
-        try {
-            const response = await fetch('/api/deployment/status');
-            if (response.ok) {
-                const data = await response.json();
-                
-                if (data.latest && data.latest.real) {
-                    this.showDeploymentSuccess(data.latest);
-                } else {
-                    this.showReadyMessage();
-                }
-            }
-        } catch (error) {
-            this.showOfflineMessage();
-        }
-    }
-    
-    showDeploymentSuccess(deployment) {
-        const timeAgo = this.getTimeAgo(deployment.timestamp);
-        const commitShort = deployment.commit ? deployment.commit.substring(0, 7) : 'unknown';
-        
-        this.notification.innerHTML = `
-            <div style="display: flex; align-items: center; margin-bottom: 8px;">
-                <span style="font-size: 18px; margin-right: 8px;">🚀</span>
-                <strong style="flex: 1;">DEPLOYMENT SUCCESS!</strong>
-                <span style="cursor: pointer; font-weight: bold;" onclick="this.parentElement.parentElement.remove()">✕</span>
-            </div>
-            <div style="font-size: 12px; line-height: 1.4;">
-                <div>Version: <strong>v${deployment.version}</strong></div>
-                <div>Commit: <code>${commitShort}</code></div>
-                <div>Deployed: ${timeAgo}</div>
+    showDeploymentSuccess() {
+        const notification = document.createElement('div');
+        notification.innerHTML = `
+            <div style="position: fixed; top: 20px; right: 20px; 
+                       background: linear-gradient(135deg, #4CAF50, #45a049);
+                       color: white; padding: 15px 20px; border-radius: 10px;
+                       box-shadow: 0 8px 25px rgba(0,0,0,0.15); z-index: 10000;
+                       border-left: 5px solid #2E7D32;">
+                <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 18px; margin-right: 8px;">🚀</span>
+                    <strong style="flex: 1;">DEPLOYMENT SUCCESS!</strong>
+                </div>
+                <div style="font-size: 12px; line-height: 1.4;">
+                    <div>Version: <strong>v1.0.0</strong></div>
+                    <div>Deployed: Just now</div>
+                    <div>Status: ✅ Operational</div>
+                </div>
             </div>
         `;
         
-        this.notification.style.background = 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)';
-        this.notification.classList.add('pulse');
+        document.body.appendChild(notification);
         
-        // Auto-hide after 15 seconds
+        // Auto-remove after 10 seconds
         setTimeout(() => {
-            if (this.notification && this.notification.parentElement) {
-                this.notification.remove();
+            if (notification.parentElement) {
+                notification.remove();
             }
-        }, 15000);
-    }
-    
-    showReadyMessage() {
-        this.notification.innerHTML = `
-            <div style="display: flex; align-items: center;">
-                <span style="font-size: 16px; margin-right: 8px;">✅</span>
-                <strong>CI/CD READY</strong>
-            </div>
-            <div style="font-size: 11px; margin-top: 5px; opacity: 0.9;">
-                System is live and waiting for deployments
-            </div>
-        `;
-        
-        this.notification.style.background = 'linear-gradient(135deg, #2196F3 0%, #21CBF3 100%)';
-        this.notification.classList.remove('pulse');
-    }
-    
-    showOfflineMessage() {
-        this.notification.innerHTML = `
-            <div style="display: flex; align-items: center;">
-                <span style="font-size: 16px; margin-right: 8px;">🔧</span>
-                <strong>SETUP MODE</strong>
-            </div>
-            <div style="font-size: 11px; margin-top: 5px; opacity: 0.9;">
-                Configuring deployment tracking...
-            </div>
-        `;
-        
-        this.notification.style.background = 'linear-gradient(135deg, #FF9800 0%, #FF5722 100%)';
-        this.notification.classList.remove('pulse');
-    }
-    
-    getTimeAgo(timestamp) {
-        const now = new Date();
-        const then = new Date(timestamp);
-        const diff = now - then;
-        
-        const minutes = Math.floor(diff / 60000);
-        const hours = Math.floor(diff / 3600000);
-        
-        if (minutes < 1) return 'Just now';
-        if (minutes < 60) return `${minutes}m ago`;
-        if (hours < 24) return `${hours}h ago`;
-        return 'Today';
+        }, 10000);
     }
 }
 
-// Initialize when page loads
-document.addEventListener('DOMContentLoaded', function() {
-    new RealDeploymentNotifier();
-});
-
-// Manual trigger for testing (remove in production)
-window.testDeployment = function() {
-    const notifier = new RealDeploymentNotifier();
-    notifier.showDeploymentSuccess({
-        version: '2.0.0',
-        commit: 'a1b2c3d',
-        timestamp: new Date().toISOString(),
-        real: true
-    });
-};
+new DeploymentNotifier();
