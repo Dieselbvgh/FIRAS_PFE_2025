@@ -93,7 +93,7 @@ jobs:
           
           # Create systemd service
           echo "🔧 Setting up system service..."
-          sudo bash -c 'cat > /etc/systemd/system/devsecops-dashboard.service << EOL
+          sudo tee /etc/systemd/system/devsecops-dashboard.service > /dev/null << 'EOL'
 [Unit]
 Description=DevSecOps Dashboard
 After=network.target
@@ -112,7 +112,7 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-EOL'
+EOL
           
           # Reload systemd
           echo "🔄 Reloading system services..."
