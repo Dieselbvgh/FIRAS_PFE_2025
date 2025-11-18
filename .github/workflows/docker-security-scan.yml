@@ -57,7 +57,7 @@ jobs:
       run: |
         echo "🛠️ Building hardened nginx version..."
         
-        # Create hardened Dockerfile for nginx (Alpine-based)
+        # Create hardened Dockerfile with CORRECT order
         cat > Dockerfile.secure << 'DOCKERFILE'
         FROM nginx:1.18-alpine
         
@@ -67,16 +67,16 @@ jobs:
         # Remove unnecessary packages to reduce attack surface
         RUN apk del curl wget 2>/dev/null || echo "Packages not present"
         
-        # Use non-root user for security
+        # Clean up cache AS ROOT (before switching user)
+        RUN rm -rf /var/cache/apk/*
+        
+        # Use non-root user for security (AFTER cleanup)
         RUN addgroup -g 1001 -S appuser && \
             adduser -S appuser -u 1001 -G appuser && \
             chown -R appuser:appuser /var/cache/nginx
         
         # Switch to non-root user
         USER appuser
-        
-        # Clean up cache
-        RUN rm -rf /var/cache/apk/*
         DOCKERFILE
         
         sudo docker build -f Dockerfile.secure -t nginx-secure-$(date +%s) .
