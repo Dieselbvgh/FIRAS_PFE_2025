@@ -17,34 +17,26 @@ jobs:
         sudo systemctl start docker
         sleep 2
 
-    - name: 🔄 Update Trivy Database
+    - name: 🔍 Scan with Grype (More Reliable)
       run: |
-        echo "🔄 Updating Trivy vulnerability database..."
-        sudo trivy image --download-db-only
-        echo "✅ Database update completed"
-
-    - name: 🔍 Scan VERY OLD Image with Real Vulnerabilities
-      run: |
-        echo "🔍 Scanning node:8-alpine (VERY OLD with known vulnerabilities)..."
+        echo "🔍 Scanning node:8-alpine with Grype..."
         
-        # Use VERY old Node.js version that definitely has vulnerabilities
+        # Use Grype instead of Trivy - more reliable
         sudo docker pull node:8-alpine
         
-        # Scan and save proper JSON output
-        sudo trivy image --format json node:8-alpine > scan-original.json 2>&1
+        # Scan with Grype and count vulnerabilities
+        sudo grype node:8-alpine --output json > grype-scan.json 2>/dev/null || true
         
-        # Debug: Check if file has content
-        echo "=== SCAN FILE CONTENT ==="
-        head -5 scan-original.json
-        echo "=== END SCAN FILE ==="
-        
-        # Count vulnerabilities using proper JSON parsing
-        if [ -s scan-original.json ]; then
-          OLD_CRITICAL=$(python3 -c "import json; data=json.load(open('scan-original.json')); print(sum(1 for r in data.get('Results', []) for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'CRITICAL'))" 2>/dev/null || echo "0")
-          OLD_HIGH=$(python3 -c "import json; data=json.load(open('scan-original.json')); print(sum(1 for r in data.get('Results', []) for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'HIGH'))" 2>/dev/null || echo "0")
+        # Count vulnerabilities from Grype JSON
+        if [ -s grype-scan.json ]; then
+          OLD_CRITICAL=$(grep -o '"severity":"Critical"' grype-scan.json | wc -l)
+          OLD_HIGH=$(grep -o '"severity":"High"' grype-scan.json | wc -l)
         else
-          OLD_CRITICAL=0
-          OLD_HIGH=0
+          # Fallback to simple text output counting
+          echo "=== TRYING TEXT OUTPUT ==="
+          sudo grype node:8-alpine > grype-text.txt 2>&1 || true
+          OLD_CRITICAL=$(grep -c "Critical" grype-text.txt || echo "0")
+          OLD_HIGH=$(grep -c "High" grype-text.txt || echo "0")
         fi
         
         # Set safe defaults
@@ -55,59 +47,49 @@ jobs:
         echo "  Critical vulnerabilities: $OLD_CRITICAL"
         echo "  High vulnerabilities: $OLD_HIGH"
         
-        # Track in dashboard with SAFE values
+        # Also try Trivy as backup
+        echo "=== TRIVY BACKUP SCAN ==="
+        sudo trivy image node:8-alpine 2>&1 | grep -E "(CRITICAL|HIGH)" | head -10 || echo "No Trivy results"
+        
+        # Track in dashboard
         curl -X POST http://localhost:3000/api/deployments/track \
           -H "Content-Type: application/json" \
-          -d "{\"status\": \"vulnerability-scan\", \"source\": \"security-scan\", \"commit\": \"scan-start\", \"vulnerabilities_original\": $OLD_CRITICAL}" || echo "Tracking failed but continuing"
+          -d "{\"status\": \"vulnerability-scan\", \"source\": \"security-scan\", \"commit\": \"grype-scan\", \"vulnerabilities\": $OLD_CRITICAL}" || echo "Tracking failed"
 
     - name: 🛠️ Build Secure Version
       run: |
         echo "🛠️ Building hardened version..."
         
-        # Create hardened Dockerfile
         cat > Dockerfile.secure << 'DOCKERFILE'
         FROM node:8-alpine
-        
-        # Update ALL packages
         RUN apk update && apk upgrade --no-cache
-        
-        # Remove unnecessary packages
         RUN apk del curl wget 2>/dev/null || echo "Packages not present"
-        
-        # Clean up cache as root
         RUN rm -rf /var/cache/apk/*
-        
-        # Use non-root user
-        RUN addgroup -g 1001 -S appuser && \
-            adduser -S appuser -u 1001 -G appuser
-            
-        # Switch to non-root user
+        RUN addgroup -g 1001 -S appuser && adduser -S appuser -u 1001 -G appuser
         USER appuser
         DOCKERFILE
         
-        sudo docker build -f Dockerfile.secure -t node-secure-$(date +%s) .
+        sudo docker build -f Dockerfile.secure -t node-secure-test .
         echo "✅ Hardened image built"
 
-    - name: 🔍 Scan Secure Image
+    - name: 🔍 Scan Secure Image with Grype
       run: |
-        echo "🔍 Scanning the hardened image..."
+        echo "🔍 Scanning hardened image with Grype..."
         
-        # Find the secure image
-        SECURE_IMAGE=$(sudo docker images --format "table {{.Repository}}:{{.Tag}}" | grep node-secure | head -1)
-        echo "Scanning: $SECURE_IMAGE"
+        # Scan hardened image
+        sudo grype node-secure-test --output json > grype-secure.json 2>/dev/null || true
         
-        sudo trivy image --format json "$SECURE_IMAGE" > scan-secure.json 2>&1
-        
-        # Count vulnerabilities in hardened image
-        if [ -s scan-secure.json ]; then
-          NEW_CRITICAL=$(python3 -c "import json; data=json.load(open('scan-secure.json')); print(sum(1 for r in data.get('Results', []) for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'CRITICAL'))" 2>/dev/null || echo "0")
-          NEW_HIGH=$(python3 -c "import json; data=json.load(open('scan-secure.json')); print(sum(1 for r in data.get('Results', []) for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'HIGH'))" 2>/dev/null || echo "0")
+        # Count vulnerabilities
+        if [ -s grype-secure.json ]; then
+          NEW_CRITICAL=$(grep -o '"severity":"Critical"' grype-secure.json | wc -l)
+          NEW_HIGH=$(grep -o '"severity":"High"' grype-secure.json | wc -l)
         else
-          NEW_CRITICAL=0
-          NEW_HIGH=0
+          # Fallback to text
+          sudo grype node-secure-test > grype-secure-text.txt 2>&1 || true
+          NEW_CRITICAL=$(grep -c "Critical" grype-secure-text.txt || echo "0")
+          NEW_HIGH=$(grep -c "High" grype-secure-text.txt || echo "0")
         fi
         
-        # Set safe defaults
         NEW_CRITICAL=${NEW_CRITICAL:-0}
         NEW_HIGH=${NEW_HIGH:-0}
         
@@ -115,11 +97,12 @@ jobs:
         echo "  Critical vulnerabilities: $NEW_CRITICAL"
         echo "  High vulnerabilities: $NEW_HIGH"
 
-    - name: 📊 Show Results
+    - name: 📊 Show Final Results
       run: |
         echo "========================================"
         echo "🎉 SECURITY SCAN RESULTS"
         echo "========================================"
+        echo "Scanner: Grype"
         echo "Image: node:8-alpine"
         echo ""
         echo "🔓 BEFORE HARDENING:"
@@ -138,35 +121,29 @@ jobs:
         echo "  Critical: -$CRITICAL_REDUCTION"
         echo "  High: -$HIGH_REDUCTION"
         
-        TOTAL_REDUCTION=$((CRITICAL_REDUCTION + HIGH_REDUCTION))
-        
-        if [ $TOTAL_REDUCTION -gt 0 ]; then
+        if [ $CRITICAL_REDUCTION -gt 0 ] || [ $HIGH_REDUCTION -gt 0 ]; then
           echo ""
-          echo "✅ SUCCESS: $TOTAL_REDUCTION vulnerabilities fixed!"
-          echo "🔒 Security hardening effective!"
+          echo "✅ SUCCESS: Security improvements achieved!"
+          echo "🔒 Package updates reduced vulnerabilities"
         elif [ $OLD_CRITICAL -gt 0 ]; then
           echo ""
           echo "⚠️  Vulnerabilities found but no reduction"
-          echo "💡 Package updates might not fix all issues"
+          echo "💡 Some vulnerabilities might not be patchable via package updates"
         else
           echo ""
-          echo "❌ NO VULNERABILITIES FOUND"
-          echo "💡 Try different older images"
+          echo "❌ NO VULNERABILITIES DETECTED"
+          echo "💡 The scanner might not be working properly"
+          echo "💡 Try: sudo grype node:8-alpine"
         fi
         echo "========================================"
         
-        # Track final results with SAFE values
-        if [ -n "$OLD_CRITICAL" ] && [ -n "$NEW_CRITICAL" ]; then
-          curl -X POST http://localhost:3000/api/deployments/track \
-            -H "Content-Type: application/json" \
-            -d "{\"status\": \"security-scan-complete\", \"source\": \"security-pipeline\", \"commit\": \"scan-done\", \"vulnerabilities_before\": $OLD_CRITICAL, \"vulnerabilities_after\": $NEW_CRITICAL, \"reduction\": $CRITICAL_REDUCTION}" || echo "Final tracking failed"
-        else
-          echo "Cannot track - vulnerability counts are empty"
-        fi
+        # Track results
+        curl -X POST http://localhost:3000/api/deployments/track \
+          -H "Content-Type: application/json" \
+          -d "{\"status\": \"scan-complete\", \"source\": \"grype-scan\", \"commit\": \"final\", \"vuln_before\": $OLD_CRITICAL, \"vuln_after\": $NEW_CRITICAL}" || echo "Tracking failed"
 
     - name: 🧹 Cleanup
       run: |
-        rm -f scan-original.json scan-secure.json Dockerfile.secure || true
-        sudo docker rmi -f $(sudo docker images -q node-secure-*) 2>/dev/null || true
-        sudo docker rmi node:8-alpine 2>/dev/null || true
+        rm -f grype-*.json grype-*.txt Dockerfile.secure || true
+        sudo docker rmi node-secure-test node:8-alpine 2>/dev/null || true
         echo "🧹 Cleanup completed"
