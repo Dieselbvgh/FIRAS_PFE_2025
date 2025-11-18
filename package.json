@@ -5,7 +5,6 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js",
     "docker:build": "docker build -t devsecops-dashboard .",
     "docker:run": "docker run -p 5001:5001 devsecops-dashboard",
     "compose:up": "docker-compose up -d",
@@ -16,9 +15,6 @@
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
   },
   "author": "Firas Aouadni",
   "license": "MIT"
