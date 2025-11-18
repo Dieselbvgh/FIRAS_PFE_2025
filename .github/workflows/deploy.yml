@@ -1,34 +1,47 @@
-kdeploy:
-  runs-on: self-hosted  # ← THIS IS THE KEY CHANGE!
-  needs: test
-  steps:
-  - uses: actions/checkout@v4
-  - name: 🚀 Deploy Application
-    run: |
-      echo "=== 🚀 STARTING DEPLOYMENT ==="
-      cd /home/ubuntu/FIRAS_PFE_2025
-      
-      echo "📥 Pulling latest code..."
-      git pull origin main
-      
-      echo "📦 Installing dependencies..."
-      npm install
-      
-      echo "🔄 Restarting application with PM2..."
-      pm2 reload devsecops-dashboard --update-env
-      
-      echo "⏳ Waiting for restart..."
-      sleep 8
-      
-      echo "🔍 Checking application status..."
-      if curl -f http://localhost:3000/health; then
-        echo "=== ✅ DEPLOYMENT SUCCESS! ==="
-        echo "🌐 Dashboard: http://localhost:3000"
-        echo "📊 PM2 Status:"
-        pm2 status
-      else
-        echo "=== ❌ DEPLOYMENT FAILED ==="
-        echo "📋 Checking PM2 logs..."
-        pm2 logs --lines 10
-        exit 1
-      fi
+name: 🚀 Deploy DevSecOps Dashboard
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - run: node -c server.js && echo "✅ Server syntax OK"
+
+  deploy:
+    runs-on: self-hosted
+    needs: test
+    steps:
+    - uses: actions/checkout@v4
+    - name: 🚀 Deploy Application
+      run: |
+        echo "=== 🚀 STARTING DEPLOYMENT ==="
+        cd /home/ubuntu/FIRAS_PFE_2025
+        
+        echo "📥 Pulling latest code..."
+        git pull origin main
+        
+        echo "📦 Installing dependencies..."
+        npm install
+        
+        echo "🔄 Restarting application with PM2..."
+        pm2 reload devsecops-dashboard --update-env
+        
+        echo "⏳ Waiting for restart..."
+        sleep 8
+        
+        echo "🔍 Checking application status..."
+        if curl -f http://localhost:3000/health; then
+          echo "=== ✅ DEPLOYMENT SUCCESS! ==="
+          echo "🌐 Dashboard: http://localhost:3000"
+          echo "📊 PM2 Status:"
+          pm2 status
+        else
+          echo "=== ❌ DEPLOYMENT FAILED ==="
+          echo "📋 Checking PM2 logs..."
+          pm2 logs --lines 10
+          exit 1
+        fi
