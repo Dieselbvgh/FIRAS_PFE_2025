@@ -72,6 +72,31 @@ function pushAlert(obj){
   return a;
 }
 
+// Enhanced logging function
+function enhancedLog(level, message, data = null) {
+  const timestamp = new Date().toISOString();
+  const logEntry = {
+    timestamp,
+    level,
+    message,
+    data,
+    pid: process.pid,
+    hostname: os.hostname()
+  };
+  
+  const logLine = `[${timestamp}] [${level.toUpperCase()}] ${message}` + 
+                  (data ? ` | ${JSON.stringify(data)}` : '');
+  
+  // Console output
+  console.log(logLine);
+  
+  // File logging
+  const logFile = path.join(LOGS_DIR, `server-${new Date().toISOString().split('T')[0]}.log`);
+  fs.appendFileSync(logFile, logLine + '\n');
+  
+  return logEntry;
+}
+
 // ----------------- VAN checks -----------------
 async function checkAptUpdate(){
   try {
@@ -458,37 +483,103 @@ app.get('/api/overview', async (req,res) => {
   res.json({ ok:true, host: os.hostname(), van, last_scan: scan, alerts_count: readAlerts().length });
 });
 
-app.get('/health', (req,res) => res.json({ ok:true }));
+// ==================== GITHUB WEBHOOK DEPLOYMENT ENDPOINTS ====================
 
-app.listen(PORT, () => {
-  log('Server started on port '+PORT+' (ENABLE_REAL_FIX='+ENABLE_REAL_FIX+')');
-  console.log('Open http://localhost:'+PORT);
+// ----------------- GitHub Webhook Deployment -----------------
+app.post('/api/deploy', (req, res) => {
+    const { secret } = req.body;
+    const expectedSecret = process.env.DEPLOY_SECRET;
+    
+    enhancedLog('info', '🚀 Webhook deployment triggered', { 
+        hasSecret: !!secret, 
+        hasExpectedSecret: !!expectedSecret 
+    });
+    
+    // Verify secret
+    if (!expectedSecret || secret !== expectedSecret) {
+        enhancedLog('warn', '❌ Invalid deploy secret attempt');
+        return res.status(401).json({ 
+            error: 'Unauthorized',
+            message: 'Invalid deployment secret'
+        });
+    }
+    
+    // Send immediate response
+    res.json({ 
+        status: 'deployment_started',
+        message: 'Deployment process initiated',
+        timestamp: new Date().toISOString(),
+        taskId: `deploy-${Date.now()}`
+    });
+    
+    // Execute deployment in background
+    enhancedLog('info', '🔄 Starting deployment process in background...');
+    const { exec } = require('child_process');
+    
+    exec('cd /home/ubuntu/FIRAS_PFE_2025 && chmod +x deploy.sh && ./deploy.sh', 
+        (error, stdout, stderr) => {
+            if (error) {
+                enhancedLog('error', '❌ Deployment script failed', { 
+                    error: error.message,
+                    exitCode: error.code
+                });
+                return;
+            }
+            enhancedLog('info', '✅ Deployment script completed', {
+                stdout: stdout.slice(0, 500), // First 500 chars
+                stderr: stderr ? stderr.slice(0, 500) : null
+            });
+        });
 });
 
-// Enhanced logging function
-function enhancedLog(level, message, data = null) {
-  const timestamp = new Date().toISOString();
-  const logEntry = {
-    timestamp,
-    level,
-    message,
-    data,
-    pid: process.pid,
-    hostname: os.hostname()
-  };
-  
-  const logLine = `[${timestamp}] [${level.toUpperCase()}] ${message}` + 
-                  (data ? ` | ${JSON.stringify(data)}` : '');
-  
-  // Console output
-  console.log(logLine);
-  
-  // File logging
-  const logFile = path.join(LOGS_DIR, `server-${new Date().toISOString().split('T')[0]}.log`);
-  fs.appendFileSync(logFile, logLine + '\n');
-  
-  return logEntry;
-}
+// ----------------- Enhanced Health Check -----------------
+app.get('/health', (req, res) => {
+    const health = {
+        status: 'healthy',
+        service: 'DevSecOps Dashboard',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        version: process.env.npm_package_version || '1.0.0',
+        nodeVersion: process.version,
+        platform: os.platform()
+    };
+    
+    res.json(health);
+});
 
-// Replace old log function calls with enhanced logging
-// Example: enhancedLog('info', 'Server started', { port: PORT, realFix: ENABLE_REAL_FIX });
+// ----------------- Root Endpoint -----------------
+app.get('/', (req, res) => {
+    res.json({
+        message: 'DevSecOps Dashboard API',
+        version: '1.0.0',
+        description: 'Docker Security Test and Re-Build Dashboard',
+        endpoints: {
+            health: '/health (GET)',
+            deploy: '/api/deploy (POST)',
+            van: '/api/van (GET)',
+            scan: '/api/scan/docker (POST)',
+            alerts: '/api/alerts (GET)',
+            chat: '/api/chat (POST)',
+            overview: '/api/overview (GET)'
+        },
+        github: {
+            workflow: 'Auto-deployment via GitHub Actions',
+            webhook: 'POST /api/deploy with secret'
+        }
+    });
+});
+
+// ==================== SERVER START ====================
+
+app.listen(PORT, () => {
+    enhancedLog('info', 'Server started', { 
+        port: PORT, 
+        realFix: ENABLE_REAL_FIX,
+        nodeEnv: process.env.NODE_ENV || 'development'
+    });
+    console.log(`🚀 DevSecOps Dashboard running on http://localhost:${PORT}`);
+    console.log(`🔧 ENABLE_REAL_FIX: ${ENABLE_REAL_FIX}`);
+    console.log(`🌐 Health check: http://localhost:${PORT}/health`);
+    console.log(`🔄 Deploy endpoint: POST http://localhost:${PORT}/api/deploy`);
+});
