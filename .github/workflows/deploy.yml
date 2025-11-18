@@ -32,8 +32,12 @@ jobs:
           echo "📦 Installing dependencies..."
           npm install
           
+          echo "🔧 Setting up environment..."
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+          
           echo "🔄 Restarting application with PM2..."
-          pm2 reload devsecops-dashboard --update-env
+          /usr/bin/pm2 reload devsecops-dashboard --update-env
           
           echo "⏳ Waiting for restart..."
           sleep 8
@@ -43,10 +47,10 @@ jobs:
             echo "=== ✅ DEPLOYMENT SUCCESS! ==="
             echo "🌐 Dashboard: http://localhost:3000"
             echo "📊 PM2 Status:"
-            pm2 status
+            /usr/bin/pm2 status
           else
             echo "=== ❌ DEPLOYMENT FAILED ==="
             echo "📋 Checking PM2 logs..."
-            pm2 logs --lines 10
+            /usr/bin/pm2 logs --lines 10
             exit 1
           fi
