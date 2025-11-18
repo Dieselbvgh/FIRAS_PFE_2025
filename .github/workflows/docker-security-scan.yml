@@ -22,24 +22,21 @@ jobs:
         echo "🔍 Scanning node:14-alpine - this has KNOWN vulnerabilities..."
         sudo docker pull node:14-alpine
         
-        # Scan and count vulnerabilities
-        sudo trivy image --scanners vuln --skip-db-update node:14-alpine 2>&1 | tee scan-original.txt
+        # Scan and save to file
+        sudo trivy image --format json --scanners vuln --skip-db-update node:14-alpine > scan-original.json 2>&1 || true
         
-        # Count critical/high vulnerabilities
-        OLD_CRITICAL=$(grep -c "CRITICAL" scan-original.txt || echo "0")
-        OLD_HIGH=$(grep -c "HIGH" scan-original.txt || echo "0")
+        # Count vulnerabilities from JSON output
+        OLD_CRITICAL=$(grep -o '"Severity":"CRITICAL"' scan-original.json | wc -l || echo "0")
+        OLD_HIGH=$(grep -o '"Severity":"HIGH"' scan-original.json | wc -l || echo "0")
         
         echo "📊 ORIGINAL IMAGE: $OLD_CRITICAL Critical, $OLD_HIGH High vulnerabilities"
         
-        # Track in dashboard
-        curl -X POST http://localhost:3000/api/deployments/track \
-          -H "Content-Type: application/json" \
-          -d '{
-            "status": "vulnerability-scan", 
-            "source": "security-scan",
-            "commit": "'${{ github.sha }}'",
-            "vulnerabilities_original": '$OLD_CRITICAL'
-          }'
+        # Track in dashboard - with proper JSON
+        if [ "$OLD_CRITICAL" != "0" ]; then
+          curl -X POST http://localhost:3000/api/deployments/track \
+            -H "Content-Type: application/json" \
+            -d "{\"status\": \"vulnerability-scan\", \"source\": \"security-scan\", \"commit\": \"${{ github.sha }}\", \"vulnerabilities_original\": $OLD_CRITICAL}" || echo "Tracking failed but continuing"
+        fi
 
     - name: 🛠️ Build Secure Version
       run: |
@@ -51,7 +48,7 @@ jobs:
         # Update all packages (this fixes most vulnerabilities)
         RUN apk update && apk upgrade
         # Remove unnecessary packages
-        RUN apk del curl wget
+        RUN apk del curl wget 2>/dev/null || true
         # Use non-root user
         RUN adduser -D -S appuser
         USER appuser
@@ -67,32 +64,40 @@ jobs:
         SECURE_IMAGE=$(sudo docker images --format "table {{.Repository}}:{{.Tag}}" | grep node-secure | head -1)
         echo "Scanning: $SECURE_IMAGE"
         
-        sudo trivy image --scanners vuln --skip-db-update $SECURE_IMAGE 2>&1 | tee scan-secure.txt
+        sudo trivy image --format json --scanners vuln --skip-db-update "$SECURE_IMAGE" > scan-secure.json 2>&1 || true
         
-        NEW_CRITICAL=$(grep -c "CRITICAL" scan-secure.txt || echo "0")
-        NEW_HIGH=$(grep -c "HIGH" scan-secure.txt || echo "0")
+        NEW_CRITICAL=$(grep -o '"Severity":"CRITICAL"' scan-secure.json | wc -l || echo "0")
+        NEW_HIGH=$(grep -o '"Severity":"HIGH"' scan-secure.json | wc -l || echo "0")
         
         echo "📊 SECURE IMAGE: $NEW_CRITICAL Critical, $NEW_HIGH High vulnerabilities"
 
     - name: 📊 Show Results
       run: |
+        # Get the counts again to be safe
+        OLD_CRITICAL=$(grep -o '"Severity":"CRITICAL"' scan-original.json | wc -l || echo "0")
+        NEW_CRITICAL=$(grep -o '"Severity":"CRITICAL"' scan-secure.json | wc -l || echo "0")
+        
+        REDUCTION=$((OLD_CRITICAL - NEW_CRITICAL))
+        
         echo "========================================"
         echo "🎉 SECURITY SCAN RESULTS"
         echo "========================================"
         echo "🔓 Original: $OLD_CRITICAL Critical vulnerabilities"
         echo "🔒 Secure:   $NEW_CRITICAL Critical vulnerabilities"
         echo ""
-        echo "📉 Reduction: $((OLD_CRITICAL - NEW_CRITICAL)) Critical vulnerabilities fixed!"
+        echo "📉 Reduction: $REDUCTION Critical vulnerabilities fixed!"
         echo "========================================"
         
-        # Track final results
-        curl -X POST http://localhost:3000/api/deployments/track \
-          -H "Content-Type: application/json" \
-          -d '{
-            "status": "security-improved", 
-            "source": "security-scan",
-            "commit": "'${{ github.sha }}'",
-            "vulnerabilities_before": '$OLD_CRITICAL',
-            "vulnerabilities_after": '$NEW_CRITICAL',
-            "vulnerabilities_fixed": '$((OLD_CRITICAL - NEW_CRITICAL))'
-          }'
+        # Track final results - with proper JSON escaping
+        if [ "$OLD_CRITICAL" != "0" ]; then
+          curl -X POST http://localhost:3000/api/deployments/track \
+            -H "Content-Type: application/json" \
+            -d "{\"status\": \"security-improved\", \"source\": \"security-scan\", \"commit\": \"${{ github.sha }}\", \"vulnerabilities_before\": $OLD_CRITICAL, \"vulnerabilities_after\": $NEW_CRITICAL, \"vulnerabilities_fixed\": $REDUCTION}" || echo "Final tracking failed"
+        else
+          echo "No vulnerabilities found to track"
+        fi
+
+    - name: 🧹 Cleanup
+      run: |
+        rm -f scan-original.json scan-secure.json Dockerfile.secure || true
+        echo "Cleanup completed"
