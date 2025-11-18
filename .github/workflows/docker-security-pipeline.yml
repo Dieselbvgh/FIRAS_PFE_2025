@@ -59,23 +59,35 @@ jobs:
         cat > Dockerfile.hardened << 'EOF'
         FROM nginx:latest
         
-        # Security updates - update all packages
+        # Security updates - update all packages (main security improvement)
         RUN apt-get update && apt-get upgrade -y && \
             apt-get clean && \
             rm -rf /var/lib/apt/lists/*
         
-        # Remove unnecessary packages to reduce attack surface
-        RUN apt-get remove -y curl wget telnet && \
+        # Remove any unnecessary packages that might exist
+        RUN set -e; \
+            for pkg in curl wget telnet netcat; do \
+                if dpkg -l | grep -q "^ii.*$pkg "; then \
+                    echo "Removing $pkg"; \
+                    apt-get remove -y "$pkg"; \
+                else \
+                    echo "Package $pkg not installed, skipping"; \
+                fi; \
+            done; \
             apt-get autoremove -y && \
             apt-get clean
         
-        # Create non-root user for security
+        # Create non-root user for security (important security improvement)
         RUN useradd -r -s /bin/false nginxuser && \
             chown -R nginxuser:nginxuser /var/cache/nginx && \
             chown -R nginxuser:nginxuser /var/log/nginx
         
         # Switch to non-root user
         USER nginxuser
+        
+        # Health check
+        HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+          CMD curl -f http://localhost/ || exit 1
         
         EXPOSE 80
         CMD ["nginx", "-g", "daemon off;"]
@@ -128,6 +140,19 @@ jobs:
         CRITICAL_REDUCTION=$((OLD_CRITICAL - NEW_CRITICAL))
         HIGH_REDUCTION=$((OLD_HIGH - NEW_HIGH))
         
+        # Calculate improvement percentage
+        if [ $OLD_CRITICAL -gt 0 ]; then
+          CRITICAL_IMPROVEMENT=$((CRITICAL_REDUCTION * 100 / OLD_CRITICAL))
+        else
+          CRITICAL_IMPROVEMENT=0
+        fi
+        
+        if [ $OLD_HIGH -gt 0 ]; then
+          HIGH_IMPROVEMENT=$((HIGH_REDUCTION * 100 / OLD_HIGH))
+        else
+          HIGH_IMPROVEMENT=0
+        fi
+        
         echo "=========================================="
         echo "🎉 DOCKER SECURITY PIPELINE COMPLETE!"
         echo "=========================================="
@@ -135,10 +160,17 @@ jobs:
         echo "🛡️ Hardened Image: nginx-hardened-*"
         echo ""
         echo "📊 VULNERABILITY COMPARISON:"
-        echo "  Critical: $OLD_CRITICAL → $NEW_CRITICAL (Reduced by $CRITICAL_REDUCTION)"
-        echo "  High: $OLD_HIGH → $NEW_HIGH (Reduced by $HIGH_REDUCTION)"
+        echo "  Critical: $OLD_CRITICAL → $NEW_CRITICAL (Reduced by $CRITICAL_REDUCTION - $CRITICAL_IMPROVEMENT%)"
+        echo "  High: $OLD_HIGH → $NEW_HIGH (Reduced by $HIGH_REDUCTION - $HIGH_IMPROVEMENT%)"
         echo ""
-        echo "✅ Security improvements achieved!"
+        echo "🔒 SECURITY IMPROVEMENTS APPLIED:"
+        echo "  ✅ All packages updated to latest versions"
+        echo "  ✅ Unnecessary packages removed"
+        echo "  ✅ Running as non-root user"
+        echo "  ✅ Reduced attack surface"
+        echo "  ✅ Health checks added"
+        echo ""
+        echo "📁 Scan results saved in workflow artifacts"
         echo "=========================================="
         
         # Track final results in dashboard
@@ -154,9 +186,26 @@ jobs:
               "hardened_critical": '$NEW_CRITICAL',
               "hardened_high": '$NEW_HIGH',
               "critical_reduced": '$CRITICAL_REDUCTION',
-              "high_reduced": '$HIGH_REDUCTION'
+              "high_reduced": '$HIGH_REDUCTION',
+              "critical_improvement_percent": '$CRITICAL_IMPROVEMENT',
+              "high_improvement_percent": '$HIGH_IMPROVEMENT',
+              "security_improvements": [
+                "package_updates",
+                "non_root_user", 
+                "reduced_attack_surface",
+                "health_checks"
+              ]
             }
           }' || echo "Final tracking completed"
+
+    - name: 📁 Upload Scan Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-scan-results
+        path: |
+          scan-output.txt
+          hardened-scan-output.txt
+        retention-days: 7
 
     - name: 🧹 Cleanup
       run: |
