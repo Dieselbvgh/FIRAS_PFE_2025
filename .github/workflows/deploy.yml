@@ -3,9 +3,6 @@ name: 🚀 Docker Security Test, Build & Deploy
 on:
   push:
     branches: [ main ]
-  schedule:
-    # Weekly security scan every Monday at 06:00 UTC
-    - cron: '0 6 * * 1'
 
 jobs:
   security-scan:
@@ -19,13 +16,7 @@ jobs:
       with:
         scan-type: 'fs'
         scan-ref: '.'
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-
-    - name: 📤 Upload Trivy scan results
-      uses: github/codeql-action/upload-sarif@v3
-      with:
-        sarif_file: 'trivy-results.sarif'
+        format: 'table'
 
     - name: 🧪 Run npm security audit
       run: |
@@ -43,24 +34,21 @@ jobs:
       uses: docker/setup-buildx-action@v3
 
     - name: 🐳 Log in to Docker Hub
-      if: ${{ secrets.DOCKERHUB_USERNAME != '' }}
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    - name: 🐳 Build Docker image
+    - name: 🐳 Build and push Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
-        push: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+        push: true
         tags: |
           ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-dashboard:latest
           ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-dashboard:${{ github.sha }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        build-args: |
-          NODE_ENV=production
 
   test:
     runs-on: ubuntu-latest
@@ -71,9 +59,6 @@ jobs:
     
     - name: 🔍 Syntax check
       run: node -c server.js && echo "✅ Server syntax OK"
-    
-    - name: 📦 Install dependencies
-      run: npm ci
 
   deploy:
     runs-on: self-hosted
@@ -82,11 +67,10 @@ jobs:
     - name: 📥 Checkout code
       uses: actions/checkout@v4
 
-    - name: 🐳 Build image locally (if no Docker Hub)
-      if: ${{ secrets.DOCKERHUB_USERNAME == '' }}
+    - name: 🐳 Pull latest image
       run: |
-        echo "🐳 Building Docker image locally..."
-        docker build -t devsecops-dashboard:latest .
+        echo "📥 Pulling latest Docker image..."
+        docker pull ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-dashboard:latest
 
     - name: 🚀 Deploy with Docker Compose
       run: |
@@ -96,14 +80,11 @@ jobs:
         echo "📦 Stopping existing containers..."
         docker-compose down || true
         
-        echo "🐳 Pulling latest images (if available)..."
-        docker-compose pull || echo "No remote images, using local build"
-        
         echo "🚀 Starting services..."
         docker-compose up -d
         
         echo "⏳ Waiting for services to start..."
-        sleep 10
+        sleep 15
         
         echo "🔍 Checking application health..."
         MAX_RETRIES=10
@@ -111,7 +92,7 @@ jobs:
         
         while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
           if curl -f http://localhost:5001/health; then
-            echo "=== ✅ DOCKER DEPLOYMENT SUCCESS! ==="
+            echo "=== ✅ DEPLOYMENT SUCCESS! ==="
             echo "🌐 Dashboard: http://localhost:5001"
             echo "📊 Application is running successfully!"
             break
@@ -133,9 +114,6 @@ jobs:
       run: |
         echo "🐳 Running containers:"
         docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-        
-        echo "📈 Container resource usage:"
-        docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" | head -5
 
     - name: 🧹 Clean up old images
       run: |
