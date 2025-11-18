@@ -2,27 +2,23 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Copy package files first (for better caching)
+# Copy package files first
 COPY package*.json ./
 RUN npm ci --only=production
 
-# Copy application code
+# Copy app code
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p data logs
+# Create directories as ROOT and set permissions
+RUN mkdir -p data logs && \
+    chmod 755 data logs
 
-# Expose port
-EXPOSE 5001
+# Expose port 3000
+EXPOSE 3000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:5001/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD curl -f http://localhost:3000/health || exit 1
 
-# Non-root user for security
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S nextjs -u 1001
-USER nextjs
-
-# Start the application
+# Run as root to avoid permission issues
 CMD ["node", "server.js"]
