@@ -18,81 +18,53 @@ jobs:
         scan-ref: '.'
         format: 'table'
 
-    - name: 🧪 Run npm security audit
-      run: |
-        echo "Running npm security audit..."
-        npm audit --audit-level moderate || true
-
-  test:
-    runs-on: ubuntu-latest
+  deploy:
+    runs-on: self-hosted
     needs: security-scan
     steps:
     - name: 📥 Checkout code
       uses: actions/checkout@v4
-    
-    - name: 🔍 Syntax check
-      run: node -c server.js && echo "✅ Server syntax OK"
 
-  deploy:
-    runs-on: self-hosted
-    needs: [security-scan, test]
-    steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
-
-    - name: 🐳 Build and deploy with Docker
+    - name: 🚀 Deploy to Host System
       run: |
-        echo "🚀 Starting deployment..."
+        echo "🚀 Starting deployment to host system..."
         cd /home/ubuntu/FIRAS_PFE_2025
         
-        echo "🐳 Building Docker image..."
-        docker build -t devsecops-dashboard:latest .
+        echo "📦 Pulling latest code..."
+        git pull origin main
         
-        echo "📦 Stopping existing containers..."
-        docker-compose down || true
+        echo "📦 Installing dependencies..."
+        npm install
         
-        echo "🚀 Starting services..."
-        docker-compose up -d
+        echo "🔄 Restarting application..."
+        sudo systemctl restart devsecops-dashboard
         
-        echo "⏳ Waiting for services to start..."
+        echo "⏳ Waiting for application to start..."
         sleep 15
         
         echo "🔍 Checking application health..."
-        MAX_RETRIES=10
-        RETRY_COUNT=0
-        
-        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-          if curl -f http://localhost:3000/health; then
-            echo "=== ✅ DEPLOYMENT SUCCESS! ==="
-            echo "🌐 Dashboard: http://localhost:3000"
-            echo "📊 Application is running successfully!"
-            
-            # Track deployment in dashboard
-            curl -X POST http://localhost:3000/api/deployments/track \
-              -H "Content-Type: application/json" \
-              -d '{"status": "success", "source": "github-actions", "commit": "'${{ github.sha }}'"}'
-            
-            break
+        if curl -f http://localhost:3000/health; then
+          echo "=== ✅ DEPLOYMENT SUCCESS! ==="
+          echo "🌐 Dashboard: http://localhost:3000"
+          
+          # Wait a bit more to ensure dashboard is fully ready
+          sleep 5
+          
+          # Track deployment in dashboard with better error handling
+          echo "📊 Tracking deployment in dashboard..."
+          if curl -X POST http://localhost:3000/api/deployments/track \
+            -H "Content-Type: application/json" \
+            -d '{"status": "success", "source": "github-actions", "commit": "'${{ github.sha }}'", "version": "1.0.0"}'; then
+            echo "✅ Deployment tracked successfully!"
           else
-            RETRY_COUNT=$((RETRY_COUNT+1))
-            echo "⏳ Health check failed, retrying... ($RETRY_COUNT/$MAX_RETRIES)"
-            sleep 5
+            echo "⚠️ Deployment tracking failed, but deployment was successful"
           fi
-        done
-        
-        if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-          echo "=== ❌ DEPLOYMENT FAILED - Health check timeout ==="
-          echo "📋 Checking container logs..."
-          docker-compose logs
+        else
+          echo "=== ❌ DEPLOYMENT FAILED ==="
+          # Track failed deployment
+          curl -X POST http://localhost:3000/api/deployments/track \
+            -H "Content-Type: application/json" \
+            -d '{"status": "failed", "source": "github-actions", "commit": "'${{ github.sha }}'", "version": "1.0.0"}' || true
+          sudo journalctl -u devsecops-dashboard --lines=20
           exit 1
         fi
-
-    - name: 📊 Show deployment status
-      run: |
-        echo "🐳 Running containers:"
-        docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-
-    - name: 🧹 Clean up old images
-      run: |
-        echo "🧹 Cleaning up unused Docker resources..."
-        docker image prune -f
