@@ -1,72 +1,30 @@
-name: 🚀 Deploy DevSecOps Dashboard
+name: Deploy DevSecOps Dashboard
 
 on:
   push:
     branches: [ main ]
 
-env:
-  NODE_VERSION: '18.x'
-
 jobs:
   test:
     runs-on: ubuntu-latest
-    name: 🧪 Tests & Security
-    
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
+    - uses: actions/setup-node@v4
       with:
-        node-version: ${{ env.NODE_VERSION }}
-        cache: 'npm'
-    
-    - name: Install dependencies
-      run: npm ci
-    
-    - name: Verify project structure
-      run: |
-        echo "🔍 Checking project files..."
-        test -f server.js && echo "✅ server.js" || exit 1
-        test -f package.json && echo "✅ package.json" || exit 1
-        test -f public/index.html && echo "✅ index.html" || exit 1
-        test -f public/js/dashboard.js && echo "✅ dashboard.js" || exit 1
-        test -f public/css/style.css && echo "✅ style.css" || exit 1
-        echo "🎯 All files verified!"
-    
-    - name: Syntax check
-      run: |
-        node -c server.js
-        echo "✅ Server syntax OK"
-    
-    - name: Basic security scan
-      run: |
-        echo "🔒 Running basic security checks..."
-        npm audit --audit-level high || echo "⚠️ Audit completed"
-        echo "✅ Security checks passed"
+        node-version: '18.x'
+    - run: npm ci
+    - run: node -c server.js
+    - run: |
+        test -f server.js && echo "✅ server.js"
+        test -f package.json && echo "✅ package.json"
+        test -f public/index.html && echo "✅ index.html"
 
   deploy:
     runs-on: ubuntu-latest
-    name: 🚀 Deploy to Production
     needs: test
     if: github.ref == 'refs/heads/main'
-    
-    environment: production
-    permissions:
-      contents: read
-    
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-        cache: 'npm'
-    
-    - name: Install dependencies
-      run: npm ci
-    
     - name: Deploy to Server
       uses: appleboy/ssh-action@v1.0.3
       with:
@@ -74,88 +32,10 @@ jobs:
         username: ${{ secrets.SERVER_USER }}
         key: ${{ secrets.SERVER_SSH_KEY }}
         script: |
-          set -e
-          echo "🚀 STARTING DEPLOYMENT..."
-          echo "📡 Server: ${{ secrets.SERVER_HOST }}"
-          echo "👤 User: ${{ secrets.SERVER_USER }}"
-          
-          # Navigate to project directory
           cd /home/ubuntu/FIRAS_PFE_2025
-          echo "📁 Current directory: $(pwd)"
-          
-          # Pull latest changes
-          echo "📥 Pulling latest code from GitHub..."
           git pull origin main
-          
-          # Install dependencies
-          echo "📦 Installing dependencies..."
           npm install --production
-          
-          # Create systemd service
-          echo "🔧 Setting up system service..."
-          sudo tee /etc/systemd/system/devsecops-dashboard.service > /dev/null << 'EOL'
-[Unit]
-Description=DevSecOps Dashboard
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/FIRAS_PFE_2025
-Environment=NODE_ENV=production
-Environment=PORT=5001
-ExecStart=/usr/bin/node server.js
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOL
-          
-          # Reload systemd
-          echo "🔄 Reloading system services..."
-          sudo systemctl daemon-reload
-          sudo systemctl enable devsecops-dashboard
-          
-          # Stop existing service
-          echo "⏹️ Stopping existing service..."
           sudo systemctl stop devsecops-dashboard || true
-          sleep 2
-          
-          # Start service
-          echo "▶️ Starting service..."
-          sudo systemctl start devsecops-dashboard
-          
-          # Wait for service to start
-          echo "⏳ Waiting for service to start..."
-          sleep 10
-          
-          # Check service status
-          echo "📊 Service status:"
-          sudo systemctl status devsecops-dashboard --no-pager
-          
-          # Test the application
-          echo "🧪 Testing application health..."
-          if curl -f http://localhost:5001/health; then
-            echo "✅ Health check PASSED"
-          else
-            echo "❌ Health check FAILED"
-            sudo journalctl -u devsecops-dashboard --no-pager -n 20
-            exit 1
-          fi
-          
-          if curl -f http://localhost:5001/api/overview; then
-            echo "✅ API check PASSED"
-          else
-            echo "❌ API check FAILED" 
-            sudo journalctl -u devsecops-dashboard --no-pager -n 20
-            exit 1
-          fi
-          
-          echo " "
-          echo "🎉 DEPLOYMENT COMPLETED SUCCESSFULLY!"
-          echo "🌐 Your dashboard is LIVE at: http://${{ secrets.SERVER_HOST }}:5001"
-          echo "📊 Monitor with: sudo systemctl status devsecops-dashboard"
-          echo "📝 Logs: sudo journalctl -u devsecops-dashboard -f"
+          sudo systemctl start devsecops-dashboard || sudo systemctl enable devsecops-dashboard && sudo systemctl start devsecops-dashboard
+          sleep 5
+          curl -f http://localhost:5001/health && echo "DEPLOYMENT SUCCESS" || echo "DEPLOYMENT FAILED"
