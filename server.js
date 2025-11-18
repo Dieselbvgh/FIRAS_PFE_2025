@@ -466,3 +466,31 @@ app.listen(PORT, () => {
   log('Server started on port '+PORT+' (ENABLE_REAL_FIX='+ENABLE_REAL_FIX+')');
   console.log('Open http://localhost:'+PORT);
 });
+
+// Enhanced logging function
+function enhancedLog(level, message, data = null) {
+  const timestamp = new Date().toISOString();
+  const logEntry = {
+    timestamp,
+    level,
+    message,
+    data,
+    pid: process.pid,
+    hostname: os.hostname()
+  };
+  
+  const logLine = `[${timestamp}] [${level.toUpperCase()}] ${message}` + 
+                  (data ? ` | ${JSON.stringify(data)}` : '');
+  
+  // Console output
+  console.log(logLine);
+  
+  // File logging
+  const logFile = path.join(LOGS_DIR, `server-${new Date().toISOString().split('T')[0]}.log`);
+  fs.appendFileSync(logFile, logLine + '\n');
+  
+  return logEntry;
+}
+
+// Replace old log function calls with enhanced logging
+// Example: enhancedLog('info', 'Server started', { port: PORT, realFix: ENABLE_REAL_FIX });
