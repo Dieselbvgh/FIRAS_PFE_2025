@@ -1,8 +1,8 @@
 version: '3.8'
 services:
   devsecops-dashboard:
-    image: devsecops-dashboard:latest
     build: .
+    image: devsecops-dashboard:latest
     ports:
       - "5001:5001"
     environment:
