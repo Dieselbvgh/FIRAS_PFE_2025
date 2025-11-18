@@ -9,8 +9,7 @@
     "docker:build": "docker build -t devsecops-dashboard .",
     "docker:run": "docker run -p 5001:5001 devsecops-dashboard",
     "compose:up": "docker-compose up -d",
-    "compose:down": "docker-compose down",
-    "test": "echo 'No tests yet' && exit 0"
+    "compose:down": "docker-compose down"
   },
   "dependencies": {
     "express": "^4.18.2",
