@@ -52,7 +52,7 @@ jobs:
       run: |
         echo "🛠️ Building hardened version..."
         
-        # Create hardened Dockerfile
+        # Create hardened Dockerfile with CORRECT order
         cat > Dockerfile.secure << 'DOCKERFILE'
         FROM node:14-alpine
         
@@ -62,15 +62,15 @@ jobs:
         # Remove unnecessary packages to reduce attack surface
         RUN apk del curl wget 2>/dev/null || echo "Packages not present"
         
-        # Use non-root user for security
+        # Clean up cache while still root
+        RUN rm -rf /var/cache/apk/*
+        
+        # Use non-root user for security (AFTER cleanup)
         RUN addgroup -g 1001 -S appuser && \
             adduser -S appuser -u 1001 -G appuser
             
         # Switch to non-root user
         USER appuser
-        
-        # Clean up
-        RUN rm -rf /var/cache/apk/*
         DOCKERFILE
         
         sudo docker build -f Dockerfile.secure -t node-secure-$(date +%s) .
