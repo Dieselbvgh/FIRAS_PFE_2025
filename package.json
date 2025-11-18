@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "docker:build": "docker build -t devsecops-dashboard .",
-    "docker:run": "docker run -p 5001:5001 devsecops-dashboard",
+    "docker:run": "docker run -p 3000:3000 devsecops-dashboard",
     "compose:up": "docker-compose up -d",
     "compose:down": "docker-compose down"
   },
@@ -17,8 +17,5 @@
     "express": "^4.18.2"
   },
   "author": "Firas Aouadni",
-  "license": "MIT",
-  "devDependencies": {
-    "nodemon": "^3.1.11"
-  }
+  "license": "MIT"
 }

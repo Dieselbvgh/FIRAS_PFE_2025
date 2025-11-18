@@ -6,19 +6,18 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --only=production
 
-# Copy app code
+# Copy application code
 COPY . .
 
-# Create directories as ROOT and set permissions
-RUN mkdir -p data logs && \
-    chmod 755 data logs
+# Create necessary directories
+RUN mkdir -p data logs
 
-# Expose port 3000
+# Expose port
 EXPOSE 3000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:3000/health || exit 1
 
-# Run as root to avoid permission issues
+# Start the application
 CMD ["node", "server.js"]

@@ -34,7 +34,7 @@ jobs:
       run: node -c server.js && echo "✅ Server syntax OK"
 
   deploy:
-    runs-on: self-hosted  # ← THIS IS THE KEY LINE!
+    runs-on: self-hosted
     needs: [security-scan, test]
     steps:
     - name: 📥 Checkout code
@@ -66,6 +66,12 @@ jobs:
             echo "=== ✅ DEPLOYMENT SUCCESS! ==="
             echo "🌐 Dashboard: http://localhost:3000"
             echo "📊 Application is running successfully!"
+            
+            # Track deployment in dashboard
+            curl -X POST http://localhost:3000/api/deployments/track \
+              -H "Content-Type: application/json" \
+              -d '{"status": "success", "source": "github-actions", "commit": "'${{ github.sha }}'"}'
+            
             break
           else
             RETRY_COUNT=$((RETRY_COUNT+1))
