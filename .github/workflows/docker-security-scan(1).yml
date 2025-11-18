@@ -1,0 +1,172 @@
+name: 🔍 Docker Security Scan & Rebuild
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  security-scan-rebuild:
+    runs-on: self-hosted
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐳 Setup Docker
+      run: |
+        sudo systemctl start docker
+        sleep 2
+
+    - name: 🔍 Scan Original Image & Save Results
+      id: scan-original
+      run: |
+        echo "🔍 Scanning node:8-alpine with Grype..."
+        
+        sudo docker pull node:8-alpine
+        
+        # Scan and count vulnerabilities
+        sudo grype node:8-alpine > grype-original.txt 2>&1 || true
+        
+        # Count vulnerabilities from text output
+        OLD_CRITICAL=$(grep -c "Critical" grype-original.txt || echo "0")
+        OLD_HIGH=$(grep -c "High" grype-original.txt || echo "0")
+        
+        # Set safe defaults
+        OLD_CRITICAL=${OLD_CRITICAL:-0}
+        OLD_HIGH=${OLD_HIGH:-0}
+        
+        echo "📊 ORIGINAL SCAN RESULTS:"
+        echo "  Image: node:8-alpine"
+        echo "  Critical: $OLD_CRITICAL"
+        echo "  High: $OLD_HIGH"
+        
+        # Save to file for next steps
+        echo "OLD_CRITICAL=$OLD_CRITICAL" >> $GITHUB_ENV
+        echo "OLD_HIGH=$OLD_HIGH" >> $GITHUB_ENV
+        echo "ORIGINAL_IMAGE=node:8-alpine" >> $GITHUB_ENV
+        
+        # Show sample of vulnerabilities found
+        echo "=== SAMPLE VULNERABILITIES ==="
+        grep -E "(Critical|High)" grype-original.txt | head -5 || echo "No vulnerabilities shown"
+        
+        # Track in dashboard
+        curl -X POST http://localhost:3000/api/deployments/track \
+          -H "Content-Type: application/json" \
+          -d "{\"status\": \"original-scan\", \"source\": \"security-pipeline\", \"commit\": \"node8-scan\", \"image\": \"node:8-alpine\", \"critical_vuln\": $OLD_CRITICAL, \"high_vuln\": $OLD_HIGH}" || echo "Tracking failed"
+
+    - name: 🛠️ Build Secure Version
+      id: build-secure
+      run: |
+        echo "🛠️ Building hardened version..."
+        
+        # Create unique image name with timestamp
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        SECURE_IMAGE_NAME="node-secure-$TIMESTAMP"
+        
+        cat > Dockerfile.secure << 'DOCKERFILE'
+        FROM node:8-alpine
+        RUN apk update && apk upgrade --no-cache
+        RUN apk del curl wget 2>/dev/null || echo "Packages not present"
+        RUN rm -rf /var/cache/apk/*
+        RUN addgroup -g 1001 -S appuser && adduser -S appuser -u 1001 -G appuser
+        USER appuser
+        DOCKERFILE
+        
+        sudo docker build -f Dockerfile.secure -t $SECURE_IMAGE_NAME .
+        echo "✅ Hardened image built: $SECURE_IMAGE_NAME"
+        
+        # Save secure image name
+        echo "SECURE_IMAGE_NAME=$SECURE_IMAGE_NAME" >> $GITHUB_ENV
+        echo "SECURE_IMAGE=$SECURE_IMAGE_NAME:latest" >> $GITHUB_ENV
+
+    - name: 🔍 Scan Secure Image
+      id: scan-secure
+      run: |
+        echo "🔍 Scanning hardened image with Grype..."
+        
+        # Scan hardened image
+        SECURE_IMAGE="${{ env.SECURE_IMAGE_NAME }}:latest"
+        echo "Scanning image: $SECURE_IMAGE"
+        
+        sudo grype $SECURE_IMAGE > grype-secure.txt 2>&1 || true
+        
+        # Count vulnerabilities
+        NEW_CRITICAL=$(grep -c "Critical" grype-secure.txt || echo "0")
+        NEW_HIGH=$(grep -c "High" grype-secure.txt || echo "0")
+        
+        NEW_CRITICAL=${NEW_CRITICAL:-0}
+        NEW_HIGH=${NEW_HIGH:-0}
+        
+        echo "📊 SECURE SCAN RESULTS:"
+        echo "  Image: $SECURE_IMAGE"
+        echo "  Critical: $NEW_CRITICAL"
+        echo "  High: $NEW_HIGH"
+        
+        # Save to environment
+        echo "NEW_CRITICAL=$NEW_CRITICAL" >> $GITHUB_ENV
+        echo "NEW_HIGH=$NEW_HIGH" >> $GITHUB_ENV
+        
+        # Show sample of remaining vulnerabilities
+        echo "=== REMAINING VULNERABILITIES ==="
+        grep -E "(Critical|High)" grype-secure.txt | head -5 || echo "No vulnerabilities shown"
+
+    - name: 📊 Show Final Results
+      run: |
+        echo "========================================"
+        echo "🎉 SECURITY SCAN RESULTS"
+        echo "========================================"
+        echo "Scanner: Grype"
+        echo ""
+        echo "🔓 ORIGINAL IMAGE:"
+        echo "  Name: ${{ env.ORIGINAL_IMAGE }}"
+        echo "  Critical: ${{ env.OLD_CRITICAL }}"
+        echo "  High: ${{ env.OLD_HIGH }}"
+        echo ""
+        echo "🔒 HARDENED IMAGE:"
+        echo "  Name: ${{ env.SECURE_IMAGE }}"
+        echo "  Critical: ${{ env.NEW_CRITICAL }}"
+        echo "  High: ${{ env.NEW_HIGH }}"
+        echo ""
+        
+        # Calculate reduction using environment variables
+        OLD_CRITICAL_NUM=${{ env.OLD_CRITICAL }}
+        OLD_HIGH_NUM=${{ env.OLD_HIGH }}
+        NEW_CRITICAL_NUM=${{ env.NEW_CRITICAL }}
+        NEW_HIGH_NUM=${{ env.NEW_HIGH }}
+        
+        CRITICAL_REDUCTION=$((OLD_CRITICAL_NUM - NEW_CRITICAL_NUM))
+        HIGH_REDUCTION=$((OLD_HIGH_NUM - NEW_HIGH_NUM))
+        
+        echo "📉 VULNERABILITY REDUCTION:"
+        echo "  Critical: -$CRITICAL_REDUCTION"
+        echo "  High: -$HIGH_REDUCTION"
+        echo ""
+        
+        TOTAL_REDUCTION=$((CRITICAL_REDUCTION + HIGH_REDUCTION))
+        
+        if [ $TOTAL_REDUCTION -gt 0 ]; then
+          echo "✅ SUCCESS: $TOTAL_REDUCTION vulnerabilities fixed!"
+          echo "🔒 Security hardening is WORKING!"
+          echo ""
+          echo "💡 Hardened image ready to use:"
+          echo "   docker run -it ${{ env.SECURE_IMAGE }}"
+        elif [ $OLD_CRITICAL_NUM -gt 0 ] || [ $OLD_HIGH_NUM -gt 0 ]; then
+          echo "⚠️  Vulnerabilities found but no reduction"
+          echo "💡 Some CVEs might not be patchable via updates"
+        else
+          echo "❌ No vulnerabilities detected in original scan"
+        fi
+        echo "========================================"
+        
+        # Track final results
+        curl -X POST http://localhost:3000/api/deployments/track \
+          -H "Content-Type: application/json" \
+          -d "{\"status\": \"pipeline-complete\", \"source\": \"security-pipeline\", \"commit\": \"final-results\", \"original_image\": \"${{ env.ORIGINAL_IMAGE }}\", \"secure_image\": \"${{ env.SECURE_IMAGE }}\", \"critical_before\": $OLD_CRITICAL_NUM, \"critical_after\": $NEW_CRITICAL_NUM, \"reduction\": $CRITICAL_REDUCTION}" || echo "Final tracking failed"
+
+    - name: 🧹 Cleanup
+      run: |
+        rm -f grype-*.txt Dockerfile.secure || true
+        # Keep the secure image for inspection
+        # sudo docker rmi ${{ env.SECURE_IMAGE }} 2>/dev/null || true
+        sudo docker rmi node:8-alpine 2>/dev/null || true
+        echo "🧹 Cleanup completed (secure image preserved)"
