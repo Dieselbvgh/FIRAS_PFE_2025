@@ -23,22 +23,25 @@ jobs:
         sudo trivy image --download-db-only
         echo "✅ Database update completed"
 
-    - name: 🔍 Scan KNOWN Vulnerable Image
+    - name: 🔍 Scan OLD Node.js (Has Vulnerabilities)
       run: |
-        echo "🔍 Scanning vulnerable/httpd:2.4.46 - this has KNOWN CVEs..."
+        echo "🔍 Scanning node:14-alpine (older version with vulnerabilities)..."
         
-        # Use a known vulnerable image
-        sudo docker pull vulnerable/httpd:2.4.46
+        # Use older Node.js version that has vulnerabilities
+        sudo docker pull node:14-alpine
         
         # Scan with full database
-        sudo trivy image --format json vulnerable/httpd:2.4.46 > scan-original.json
+        sudo trivy image --format json node:14-alpine > scan-original.json
         
         # Count vulnerabilities from JSON
         OLD_CRITICAL=$(grep -o '"Severity":"CRITICAL"' scan-original.json | wc -l)
         OLD_HIGH=$(grep -o '"Severity":"HIGH"' scan-original.json | wc -l)
         OLD_MEDIUM=$(grep -o '"Severity":"MEDIUM"' scan-original.json | wc -l)
         
-        echo "📊 ORIGINAL IMAGE: $OLD_CRITICAL Critical, $OLD_HIGH High, $OLD_MEDIUM Medium vulnerabilities"
+        echo "📊 ORIGINAL IMAGE:"
+        echo "  Critical: $OLD_CRITICAL"
+        echo "  High: $OLD_HIGH" 
+        echo "  Medium: $OLD_MEDIUM"
         
         # Track in dashboard
         curl -X POST http://localhost:3000/api/deployments/track \
@@ -49,25 +52,36 @@ jobs:
       run: |
         echo "🛠️ Building hardened version..."
         
-        # Create hardened Dockerfile for httpd
+        # Create hardened Dockerfile
         cat > Dockerfile.secure << 'DOCKERFILE'
-        FROM vulnerable/httpd:2.4.46
-        # Update packages (this image uses apt)
-        RUN apt-get update && apt-get upgrade -y
-        # Remove unnecessary packages
-        RUN apt-get remove -y curl wget telnet 2>/dev/null || true
+        FROM node:14-alpine
+        
+        # Update ALL packages (this fixes most vulnerabilities)
+        RUN apk update && apk upgrade --no-cache
+        
+        # Remove unnecessary packages to reduce attack surface
+        RUN apk del curl wget 2>/dev/null || echo "Packages not present"
+        
+        # Use non-root user for security
+        RUN addgroup -g 1001 -S appuser && \
+            adduser -S appuser -u 1001 -G appuser
+            
+        # Switch to non-root user
+        USER appuser
+        
         # Clean up
-        RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+        RUN rm -rf /var/cache/apk/*
         DOCKERFILE
         
-        sudo docker build -f Dockerfile.secure -t httpd-secure-$(date +%s) .
+        sudo docker build -f Dockerfile.secure -t node-secure-$(date +%s) .
+        echo "✅ Hardened image built"
 
     - name: 🔍 Scan Secure Image
       run: |
         echo "🔍 Scanning the hardened image..."
         
         # Find the secure image
-        SECURE_IMAGE=$(sudo docker images --format "table {{.Repository}}:{{.Tag}}" | grep httpd-secure | head -1)
+        SECURE_IMAGE=$(sudo docker images --format "table {{.Repository}}:{{.Tag}}" | grep node-secure | head -1)
         echo "Scanning: $SECURE_IMAGE"
         
         sudo trivy image --format json "$SECURE_IMAGE" > scan-secure.json
@@ -76,34 +90,63 @@ jobs:
         NEW_HIGH=$(grep -o '"Severity":"HIGH"' scan-secure.json | wc -l)
         NEW_MEDIUM=$(grep -o '"Severity":"MEDIUM"' scan-secure.json | wc -l)
         
-        echo "📊 SECURE IMAGE: $NEW_CRITICAL Critical, $NEW_HIGH High, $NEW_MEDIUM Medium vulnerabilities"
+        echo "📊 SECURE IMAGE:"
+        echo "  Critical: $NEW_CRITICAL"
+        echo "  High: $NEW_HIGH"
+        echo "  Medium: $NEW_MEDIUM"
 
     - name: 📊 Show Results
       run: |
         echo "========================================"
         echo "🎉 SECURITY SCAN RESULTS"
         echo "========================================"
-        echo "🔓 Original: $OLD_CRITICAL Critical vulnerabilities"
-        echo "🔒 Secure:   $NEW_CRITICAL Critical vulnerabilities"
-        
-        REDUCTION=$((OLD_CRITICAL - NEW_CRITICAL))
+        echo "Image: node:14-alpine"
         echo ""
-        echo "📉 Reduction: $REDUCTION Critical vulnerabilities fixed!"
+        echo "🔓 BEFORE HARDENING:"
+        echo "  Critical: $OLD_CRITICAL"
+        echo "  High: $OLD_HIGH"
+        echo "  Medium: $OLD_MEDIUM"
+        echo ""
+        echo "🔒 AFTER HARDENING:"
+        echo "  Critical: $NEW_CRITICAL"
+        echo "  High: $NEW_HIGH" 
+        echo "  Medium: $NEW_MEDIUM"
+        echo ""
         
-        if [ $REDUCTION -gt 0 ]; then
-          echo "✅ SUCCESS: Security improvements achieved!"
+        CRITICAL_REDUCTION=$((OLD_CRITICAL - NEW_CRITICAL))
+        HIGH_REDUCTION=$((OLD_HIGH - NEW_HIGH))
+        MEDIUM_REDUCTION=$((OLD_MEDIUM - NEW_MEDIUM))
+        
+        echo "📉 VULNERABILITY REDUCTION:"
+        echo "  Critical: -$CRITICAL_REDUCTION"
+        echo "  High: -$HIGH_REDUCTION"
+        echo "  Medium: -$MEDIUM_REDUCTION"
+        
+        TOTAL_REDUCTION=$((CRITICAL_REDUCTION + HIGH_REDUCTION + MEDIUM_REDUCTION))
+        
+        if [ $TOTAL_REDUCTION -gt 0 ]; then
+          echo ""
+          echo "✅ SUCCESS: $TOTAL_REDUCTION vulnerabilities fixed!"
+          echo "🔒 Security hardening effective!"
         else
+          echo ""
           echo "⚠️  No vulnerability reduction detected"
-          echo "💡 This might be because the image is already patched"
+          echo "💡 The image might already be updated in registry"
         fi
         echo "========================================"
         
         # Track final results
         curl -X POST http://localhost:3000/api/deployments/track \
           -H "Content-Type: application/json" \
-          -d "{\"status\": \"security-improved\", \"source\": \"security-scan\", \"commit\": \"${{ github.sha }}\", \"vulnerabilities_before\": $OLD_CRITICAL, \"vulnerabilities_after\": $NEW_CRITICAL, \"vulnerabilities_fixed\": $REDUCTION}" || echo "Final tracking failed"
+          -d "{\"status\": \"security-scan-complete\", \"source\": \"security-pipeline\", \"commit\": \"${{ github.sha }}\", \"vulnerabilities_before\": $OLD_CRITICAL, \"vulnerabilities_after\": $NEW_CRITICAL, \"reduction\": $CRITICAL_REDUCTION}" || echo "Final tracking failed"
 
     - name: 🧹 Cleanup
       run: |
+        # Remove scan files
         rm -f scan-original.json scan-secure.json Dockerfile.secure || true
-        echo "Cleanup completed"
+        
+        # Remove Docker images to save space
+        sudo docker rmi -f $(sudo docker images -q node-secure-*) 2>/dev/null || true
+        sudo docker rmi node:14-alpine 2>/dev/null || true
+        
+        echo "🧹 Cleanup completed"
