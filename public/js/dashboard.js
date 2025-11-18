@@ -25,14 +25,145 @@ document.addEventListener('DOMContentLoaded', ()=>{
     return cve ? `https://nvd.nist.gov/vuln/detail/${encodeURIComponent(cve)}` : '#';
   }
 
-  // Overview
+  // Deployment tracking functions
+  async function loadDeploymentInfo() {
+    try {
+      const response = await fetch('/api/deployment-info');
+      return await response.json();
+    } catch (error) {
+      console.error('Failed to load deployment info:', error);
+      return null;
+    }
+  }
+
+  async function loadDeployments() {
+    try {
+      const response = await fetch('/api/deployments');
+      const data = await response.json();
+      return data.ok ? data.deployments : [];
+    } catch (error) {
+      console.error('Failed to load deployments:', error);
+      return [];
+    }
+  }
+
+  // Enhanced Overview with Deployment Info
   async function loadOverview(){
     const el = document.getElementById('overviewArea');
     el.innerText = 'Loading...';
-    const j = await jget('/api/overview');
-    el.innerHTML = `<pre>${JSON.stringify(j,null,2)}</pre>`;
+    
+    const [overview, deploymentInfo, deployments] = await Promise.all([
+      jget('/api/overview'),
+      loadDeploymentInfo(),
+      loadDeployments()
+    ]);
+
+    let html = '<div class="overview-grid">';
+    
+    // Deployment Status Card
+    html += `
+      <div class="status-card deployment-status">
+        <h3>🚀 CI/CD Pipeline Status</h3>
+        ${deploymentInfo ? `
+          <p><strong>Status:</strong> <span class="status-active">${deploymentInfo.status}</span></p>
+          <p><strong>Last Deployment:</strong> ${deploymentInfo.lastDeployment}</p>
+          <p><strong>Total Deployments:</strong> ${deploymentInfo.totalDeployments || 0}</p>
+          <p><strong>Pipeline:</strong> ${deploymentInfo.pipeline?.name || 'GitHub Actions'}</p>
+          <div class="deployment-features">
+            ${(deploymentInfo.pipeline?.features || []).map(feature => 
+              `<span class="feature-badge">${feature}</span>`
+            ).join('')}
+          </div>
+        ` : '<p>Unable to load deployment info</p>'}
+      </div>
+    `;
+
+    // Recent Deployments Card
+    html += `
+      <div class="status-card recent-deployments">
+        <h3>🔄 Recent Deployments</h3>
+        ${deployments.length > 0 ? `
+          <div class="deployment-list">
+            ${deployments.slice(0, 5).map(deploy => `
+              <div class="deployment-item ${deploy.status}">
+                <div class="deploy-header">
+                  <span class="deploy-source">${deploy.source}</span>
+                  <span class="deploy-status ${deploy.status}">${deploy.status}</span>
+                </div>
+                <div class="deploy-details">
+                  <small>Commit: ${deploy.commit}</small>
+                  <small>Time: ${new Date(deploy.timestamp).toLocaleString()}</small>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        ` : '<p>No deployments tracked yet</p>'}
+      </div>
+    `;
+
+    // System Overview Card
+    html += `
+      <div class="status-card system-overview">
+        <h3>❤️ System Overview</h3>
+        ${overview ? `
+          <p><strong>Host:</strong> ${overview.host}</p>
+          <p><strong>Alerts:</strong> ${overview.alerts_count || 0} active</p>
+          <p><strong>Last Scan:</strong> ${overview.last_scan ? overview.last_scan.scanned_at : 'Never'}</p>
+          <p><strong>Deployments:</strong> ${overview.deployments_count || 0} total</p>
+        ` : '<p>Unable to load system overview</p>'}
+      </div>
+    `;
+
+    // Manual Controls Card
+    html += `
+      <div class="status-card manual-controls">
+        <h3>🎮 Manual Controls</h3>
+        <button class="btn-small" onclick="trackManualDeployment()">Track Manual Deployment</button>
+        <button class="btn-small" onclick="refreshAllData()">Refresh All Data</button>
+        <div id="manualDeployResult" style="margin-top: 10px; font-size: 12px;"></div>
+      </div>
+    `;
+
+    html += '</div>';
+    el.innerHTML = html;
   }
-  document.getElementById('refreshOverview').addEventListener('click', loadOverview);
+
+  // Manual deployment function
+  window.trackManualDeployment = async function() {
+    const resultEl = document.getElementById('manualDeployResult');
+    resultEl.innerHTML = 'Tracking deployment...';
+    
+    try {
+      const response = await fetch('/api/deployments/track', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          status: 'success',
+          source: 'manual',
+          commit: 'user-triggered-' + Date.now()
+        })
+      });
+      
+      const data = await response.json();
+      if (data.ok) {
+        resultEl.innerHTML = '✅ Manual deployment tracked successfully!';
+        loadOverview(); // Refresh the overview
+      } else {
+        resultEl.innerHTML = '❌ Failed to track deployment';
+      }
+    } catch (error) {
+      resultEl.innerHTML = '❌ Error: ' + error.message;
+    }
+  };
+
+  window.refreshAllData = function() {
+    loadOverview();
+    loadScanReports();
+    loadVan();
+    loadAlerts();
+  };
 
   // Docker scan
   document.getElementById('scanImageBtn').addEventListener('click', async ()=>{
