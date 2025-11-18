@@ -17,44 +17,40 @@ jobs:
         sudo systemctl start docker
         sleep 2
 
-    - name: 🔍 Scan with Grype (More Reliable)
+    - name: 🔍 Scan Original Image & Save Results
+      id: scan-original
       run: |
         echo "🔍 Scanning node:8-alpine with Grype..."
         
-        # Use Grype instead of Trivy - more reliable
         sudo docker pull node:8-alpine
         
-        # Scan with Grype and count vulnerabilities
-        sudo grype node:8-alpine --output json > grype-scan.json 2>/dev/null || true
+        # Scan and count vulnerabilities
+        sudo grype node:8-alpine > grype-original.txt 2>&1 || true
         
-        # Count vulnerabilities from Grype JSON
-        if [ -s grype-scan.json ]; then
-          OLD_CRITICAL=$(grep -o '"severity":"Critical"' grype-scan.json | wc -l)
-          OLD_HIGH=$(grep -o '"severity":"High"' grype-scan.json | wc -l)
-        else
-          # Fallback to simple text output counting
-          echo "=== TRYING TEXT OUTPUT ==="
-          sudo grype node:8-alpine > grype-text.txt 2>&1 || true
-          OLD_CRITICAL=$(grep -c "Critical" grype-text.txt || echo "0")
-          OLD_HIGH=$(grep -c "High" grype-text.txt || echo "0")
-        fi
+        # Count vulnerabilities from text output
+        OLD_CRITICAL=$(grep -c "Critical" grype-original.txt || echo "0")
+        OLD_HIGH=$(grep -c "High" grype-original.txt || echo "0")
         
         # Set safe defaults
         OLD_CRITICAL=${OLD_CRITICAL:-0}
         OLD_HIGH=${OLD_HIGH:-0}
         
-        echo "📊 ORIGINAL node:8-alpine:"
-        echo "  Critical vulnerabilities: $OLD_CRITICAL"
-        echo "  High vulnerabilities: $OLD_HIGH"
+        echo "📊 ORIGINAL SCAN RESULTS:"
+        echo "  Critical: $OLD_CRITICAL"
+        echo "  High: $OLD_HIGH"
         
-        # Also try Trivy as backup
-        echo "=== TRIVY BACKUP SCAN ==="
-        sudo trivy image node:8-alpine 2>&1 | grep -E "(CRITICAL|HIGH)" | head -10 || echo "No Trivy results"
+        # Save to file for next steps
+        echo "OLD_CRITICAL=$OLD_CRITICAL" >> $GITHUB_ENV
+        echo "OLD_HIGH=$OLD_HIGH" >> $GITHUB_ENV
+        
+        # Show sample of vulnerabilities found
+        echo "=== SAMPLE VULNERABILITIES ==="
+        grep -E "(Critical|High)" grype-original.txt | head -5 || echo "No vulnerabilities shown"
         
         # Track in dashboard
         curl -X POST http://localhost:3000/api/deployments/track \
           -H "Content-Type: application/json" \
-          -d "{\"status\": \"vulnerability-scan\", \"source\": \"security-scan\", \"commit\": \"grype-scan\", \"vulnerabilities\": $OLD_CRITICAL}" || echo "Tracking failed"
+          -d "{\"status\": \"original-scan\", \"source\": \"security-pipeline\", \"commit\": \"node8-scan\", \"critical_vuln\": $OLD_CRITICAL, \"high_vuln\": $OLD_HIGH}" || echo "Tracking failed"
 
     - name: 🛠️ Build Secure Version
       run: |
@@ -72,30 +68,32 @@ jobs:
         sudo docker build -f Dockerfile.secure -t node-secure-test .
         echo "✅ Hardened image built"
 
-    - name: 🔍 Scan Secure Image with Grype
+    - name: 🔍 Scan Secure Image
+      id: scan-secure
       run: |
         echo "🔍 Scanning hardened image with Grype..."
         
         # Scan hardened image
-        sudo grype node-secure-test --output json > grype-secure.json 2>/dev/null || true
+        sudo grype node-secure-test > grype-secure.txt 2>&1 || true
         
         # Count vulnerabilities
-        if [ -s grype-secure.json ]; then
-          NEW_CRITICAL=$(grep -o '"severity":"Critical"' grype-secure.json | wc -l)
-          NEW_HIGH=$(grep -o '"severity":"High"' grype-secure.json | wc -l)
-        else
-          # Fallback to text
-          sudo grype node-secure-test > grype-secure-text.txt 2>&1 || true
-          NEW_CRITICAL=$(grep -c "Critical" grype-secure-text.txt || echo "0")
-          NEW_HIGH=$(grep -c "High" grype-secure-text.txt || echo "0")
-        fi
+        NEW_CRITICAL=$(grep -c "Critical" grype-secure.txt || echo "0")
+        NEW_HIGH=$(grep -c "High" grype-secure.txt || echo "0")
         
         NEW_CRITICAL=${NEW_CRITICAL:-0}
         NEW_HIGH=${NEW_HIGH:-0}
         
-        echo "📊 SECURE IMAGE:"
-        echo "  Critical vulnerabilities: $NEW_CRITICAL"
-        echo "  High vulnerabilities: $NEW_HIGH"
+        echo "📊 SECURE SCAN RESULTS:"
+        echo "  Critical: $NEW_CRITICAL"
+        echo "  High: $NEW_HIGH"
+        
+        # Save to environment
+        echo "NEW_CRITICAL=$NEW_CRITICAL" >> $GITHUB_ENV
+        echo "NEW_HIGH=$NEW_HIGH" >> $GITHUB_ENV
+        
+        # Show sample of remaining vulnerabilities
+        echo "=== REMAINING VULNERABILITIES ==="
+        grep -E "(Critical|High)" grype-secure.txt | head -5 || echo "No vulnerabilities shown"
 
     - name: 📊 Show Final Results
       run: |
@@ -106,44 +104,48 @@ jobs:
         echo "Image: node:8-alpine"
         echo ""
         echo "🔓 BEFORE HARDENING:"
-        echo "  Critical: $OLD_CRITICAL"
-        echo "  High: $OLD_HIGH"
+        echo "  Critical: ${{ env.OLD_CRITICAL }}"
+        echo "  High: ${{ env.OLD_HIGH }}"
         echo ""
         echo "🔒 AFTER HARDENING:"
-        echo "  Critical: $NEW_CRITICAL"
-        echo "  High: $NEW_HIGH"
+        echo "  Critical: ${{ env.NEW_CRITICAL }}"
+        echo "  High: ${{ env.NEW_HIGH }}"
         echo ""
         
-        CRITICAL_REDUCTION=$((OLD_CRITICAL - NEW_CRITICAL))
-        HIGH_REDUCTION=$((OLD_HIGH - NEW_HIGH))
+        # Calculate reduction using environment variables
+        OLD_CRITICAL_NUM=${{ env.OLD_CRITICAL }}
+        OLD_HIGH_NUM=${{ env.OLD_HIGH }}
+        NEW_CRITICAL_NUM=${{ env.NEW_CRITICAL }}
+        NEW_HIGH_NUM=${{ env.NEW_HIGH }}
+        
+        CRITICAL_REDUCTION=$((OLD_CRITICAL_NUM - NEW_CRITICAL_NUM))
+        HIGH_REDUCTION=$((OLD_HIGH_NUM - NEW_HIGH_NUM))
         
         echo "📉 VULNERABILITY REDUCTION:"
         echo "  Critical: -$CRITICAL_REDUCTION"
         echo "  High: -$HIGH_REDUCTION"
+        echo ""
         
-        if [ $CRITICAL_REDUCTION -gt 0 ] || [ $HIGH_REDUCTION -gt 0 ]; then
-          echo ""
-          echo "✅ SUCCESS: Security improvements achieved!"
-          echo "🔒 Package updates reduced vulnerabilities"
-        elif [ $OLD_CRITICAL -gt 0 ]; then
-          echo ""
+        TOTAL_REDUCTION=$((CRITICAL_REDUCTION + HIGH_REDUCTION))
+        
+        if [ $TOTAL_REDUCTION -gt 0 ]; then
+          echo "✅ SUCCESS: $TOTAL_REDUCTION vulnerabilities fixed!"
+          echo "🔒 Security hardening is WORKING!"
+        elif [ $OLD_CRITICAL_NUM -gt 0 ] || [ $OLD_HIGH_NUM -gt 0 ]; then
           echo "⚠️  Vulnerabilities found but no reduction"
-          echo "💡 Some vulnerabilities might not be patchable via package updates"
+          echo "💡 Some CVEs might not be patchable via updates"
         else
-          echo ""
-          echo "❌ NO VULNERABILITIES DETECTED"
-          echo "💡 The scanner might not be working properly"
-          echo "💡 Try: sudo grype node:8-alpine"
+          echo "❌ No vulnerabilities detected in original scan"
         fi
         echo "========================================"
         
-        # Track results
+        # Track final results
         curl -X POST http://localhost:3000/api/deployments/track \
           -H "Content-Type: application/json" \
-          -d "{\"status\": \"scan-complete\", \"source\": \"grype-scan\", \"commit\": \"final\", \"vuln_before\": $OLD_CRITICAL, \"vuln_after\": $NEW_CRITICAL}" || echo "Tracking failed"
+          -d "{\"status\": \"pipeline-complete\", \"source\": \"security-pipeline\", \"commit\": \"final-results\", \"critical_before\": $OLD_CRITICAL_NUM, \"critical_after\": $NEW_CRITICAL_NUM, \"reduction\": $CRITICAL_REDUCTION}" || echo "Final tracking failed"
 
     - name: 🧹 Cleanup
       run: |
-        rm -f grype-*.json grype-*.txt Dockerfile.secure || true
+        rm -f grype-*.txt Dockerfile.secure || true
         sudo docker rmi node-secure-test node:8-alpine 2>/dev/null || true
         echo "🧹 Cleanup completed"
