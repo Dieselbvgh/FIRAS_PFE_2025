@@ -1,47 +1,142 @@
-name: 🚀 Deploy DevSecOps Dashboard
+name: 🚀 Docker Security Test, Build & Deploy
 
 on:
   push:
     branches: [ main ]
+  schedule:
+    # Weekly security scan every Monday at 06:00 UTC
+    - cron: '0 6 * * 1'
 
 jobs:
-  test:
+  security-scan:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - run: node -c server.js && echo "✅ Server syntax OK"
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🔍 Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: 📤 Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: 🧪 Run npm security audit
+      run: |
+        echo "Running npm security audit..."
+        npm audit --audit-level moderate || true
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: security-scan
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐳 Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: 🐳 Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: 🐳 Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-dashboard:latest
+          ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-dashboard:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          NODE_ENV=production
+
+  test:
+    runs-on: ubuntu-latest
+    needs: docker-build
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: 🔍 Syntax check
+      run: node -c server.js && echo "✅ Server syntax OK"
+    
+    - name: 📦 Install dependencies
+      run: npm ci
 
   deploy:
     runs-on: self-hosted
-    needs: test
+    needs: [security-scan, docker-build, test]
     steps:
-    - uses: actions/checkout@v4
-    - name: 🚀 Deploy Application
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐳 Pull latest Docker image
       run: |
-        echo "=== 🚀 STARTING DEPLOYMENT ==="
+        echo "📥 Pulling latest Docker image..."
+        docker pull ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-dashboard:latest || echo "Image not found in registry, will build locally"
+
+    - name: 🚀 Deploy with Docker Compose
+      run: |
+        echo "🚀 Starting deployment..."
         cd /home/ubuntu/FIRAS_PFE_2025
         
-        echo "📥 Pulling latest code..."
-        git pull origin main
+        echo "📦 Stopping existing containers..."
+        docker-compose down
         
-        echo "📦 Installing dependencies..."
-        npm install
+        echo "🐳 Pulling latest images..."
+        docker-compose pull
         
-        echo "🔄 Restarting application with PM2..."
-        pm2 reload devsecops-dashboard --update-env
+        echo "🚀 Starting services..."
+        docker-compose up -d
         
-        echo "⏳ Waiting for restart..."
-        sleep 8
+        echo "⏳ Waiting for services to start..."
+        sleep 10
         
-        echo "🔍 Checking application status..."
-        if curl -f http://localhost:3000/health; then
-          echo "=== ✅ DEPLOYMENT SUCCESS! ==="
-          echo "🌐 Dashboard: http://localhost:3000"
-          echo "📊 PM2 Status:"
-          pm2 status
-        else
-          echo "=== ❌ DEPLOYMENT FAILED ==="
-          echo "📋 Checking PM2 logs..."
-          pm2 logs --lines 10
+        echo "🔍 Checking application health..."
+        MAX_RETRIES=10
+        RETRY_COUNT=0
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          if curl -f http://localhost:5001/health; then
+            echo "=== ✅ DOCKER DEPLOYMENT SUCCESS! ==="
+            echo "🌐 Dashboard: http://localhost:5001"
+            echo "📊 Application is running successfully!"
+            break
+          else
+            RETRY_COUNT=$((RETRY_COUNT+1))
+            echo "⏳ Health check failed, retrying... ($RETRY_COUNT/$MAX_RETRIES)"
+            sleep 5
+          fi
+        done
+        
+        if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+          echo "=== ❌ DEPLOYMENT FAILED - Health check timeout ==="
+          echo "📋 Checking container logs..."
+          docker-compose logs
           exit 1
         fi
+
+    - name: 📊 Show deployment status
+      run: |
+        echo "🐳 Running containers:"
+        docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+        
+        echo "📈 Container resource usage:"
+        docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" | head -5
+
+    - name: 🧹 Clean up old images
+      run: |
+        echo "🧹 Cleaning up unused Docker resources..."
+        docker image prune -f
+        docker system prune -f --volumes
