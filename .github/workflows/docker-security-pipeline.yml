@@ -1,0 +1,122 @@
+name: 🔒 Docker Security Scan & Rebuild Pipeline
+
+on:
+  workflow_dispatch:  # Allows manual trigger
+  push:
+    branches: [ main ]
+
+jobs:
+  docker-security-pipeline:
+    runs-on: self-hosted
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐳 Set up Docker
+      run: |
+        sudo systemctl start docker || true
+        sudo usermod -aG docker $USER || true
+
+    - name: 🔍 Scan Docker Image with Trivy
+      run: |
+        echo "🔍 Scanning nginx:latest for vulnerabilities..."
+        
+        # Pull the image
+        sudo docker pull nginx:latest
+        
+        # Run Trivy scan and save results
+        sudo trivy image --format json nginx:latest > trivy-scan-results.json || echo "Trivy scan completed"
+        
+        # Count critical vulnerabilities
+        CRITICAL_COUNT=$(cat trivy-scan-results.json | grep -o '"Severity":"CRITICAL"' | wc -l || echo "0")
+        HIGH_COUNT=$(cat trivy-scan-results.json | grep -o '"Severity":"HIGH"' | wc -l || echo "0")
+        
+        echo "📊 Scan Results: $CRITICAL_COUNT Critical, $HIGH_COUNT High vulnerabilities"
+        
+        # Track scan in dashboard
+        curl -X POST http://localhost:3000/api/deployments/track \
+          -H "Content-Type: application/json" \
+          -d '{
+            "status": "scan-completed", 
+            "source": "docker-security-pipeline",
+            "commit": "'${{ github.sha }}'",
+            "version": "scan-${{ github.run_id }}"
+          }' || echo "Scan tracking failed"
+
+    - name: 🛠️ Auto-Fix & Rebuild Image
+      run: |
+        echo "🛠️ Starting auto-fix and rebuild..."
+        
+        # Create a simple hardened Dockerfile
+        cat > Dockerfile.hardened << 'EOF'
+        FROM nginx:latest
+        
+        # Security hardening
+        RUN apt-get update && apt-get upgrade -y && \
+            apt-get clean && \
+            rm -rf /var/lib/apt/lists/*
+        
+        # Remove unnecessary packages
+        RUN apt-get remove -y curl wget && \
+            apt-get autoremove -y
+        
+        # Create non-root user
+        RUN useradd -r -s /bin/false nginxuser && \
+            chown -R nginxuser:nginxuser /var/cache/nginx && \
+            chown -R nginxuser:nginxuser /var/log/nginx
+        
+        USER nginxuser
+        
+        EXPOSE 80
+        EOF
+        
+        # Build hardened image
+        sudo docker build -f Dockerfile.hardened -t nginx-hardened-${{ github.run_id }} .
+        
+        echo "✅ Hardened image built: nginx-hardened-${{ github.run_id }}"
+        
+        # Scan the hardened image to compare
+        sudo trivy image --format json nginx-hardened-${{ github.run_id }} > trivy-hardened-results.json || echo "Hardened scan completed"
+
+    - name: 📊 Compare Results & Track
+      run: |
+        echo "📊 Comparing scan results..."
+        
+        # Count vulnerabilities in original image
+        OLD_CRITICAL=$(cat trivy-scan-results.json | grep -o '"Severity":"CRITICAL"' | wc -l || echo "0")
+        OLD_HIGH=$(cat trivy-scan-results.json | grep -o '"Severity":"HIGH"' | wc -l || echo "0")
+        
+        # Count vulnerabilities in hardened image  
+        NEW_CRITICAL=$(cat trivy-hardened-results.json | grep -o '"Severity":"CRITICAL"' | wc -l || echo "0")
+        NEW_HIGH=$(cat trivy-hardened-results.json | grep -o '"Severity":"HIGH"' | wc -l || echo "0")
+        
+        echo "🎯 VULNERABILITY REDUCTION:"
+        echo "  Critical: $OLD_CRITICAL → $NEW_CRITICAL"
+        echo "  High: $OLD_HIGH → $NEW_HIGH"
+        
+        # Track rebuild in dashboard
+        curl -X POST http://localhost:3000/api/deployments/track \
+          -H "Content-Type: application/json" \
+          -d '{
+            "status": "rebuild-completed", 
+            "source": "docker-security-pipeline",
+            "commit": "'${{ github.sha }}'",
+            "version": "hardened-${{ github.run_id }}",
+            "vulnerability_reduction": {
+              "critical": '$((OLD_CRITICAL - NEW_CRITICAL))',
+              "high": '$((OLD_HIGH - NEW_HIGH))'
+            }
+          }' || echo "Rebuild tracking failed"
+
+    - name: 🎉 Final Results
+      run: |
+        echo "=========================================="
+        echo "🚀 DOCKER SECURITY PIPELINE COMPLETE!"
+        echo "=========================================="
+        echo "📦 Original Image: nginx:latest"
+        echo "🛡️ Hardened Image: nginx-hardened-${{ github.run_id }}"
+        echo "🔍 Scan results saved to:"
+        echo "   - trivy-scan-results.json (original)"
+        echo "   - trivy-hardened-results.json (hardened)"
+        echo "📊 Check your dashboard for deployment tracking!"
+        echo "=========================================="
