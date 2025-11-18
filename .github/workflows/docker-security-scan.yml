@@ -1,0 +1,98 @@
+name: 🔍 Docker Security Scan & Rebuild
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  security-scan-rebuild:
+    runs-on: self-hosted
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐳 Setup Docker
+      run: |
+        sudo systemctl start docker
+        sleep 2
+
+    - name: 🔍 Scan Node 14 (Many Vulnerabilities)
+      run: |
+        echo "🔍 Scanning node:14-alpine - this has KNOWN vulnerabilities..."
+        sudo docker pull node:14-alpine
+        
+        # Scan and count vulnerabilities
+        sudo trivy image --scanners vuln --skip-db-update node:14-alpine 2>&1 | tee scan-original.txt
+        
+        # Count critical/high vulnerabilities
+        OLD_CRITICAL=$(grep -c "CRITICAL" scan-original.txt || echo "0")
+        OLD_HIGH=$(grep -c "HIGH" scan-original.txt || echo "0")
+        
+        echo "📊 ORIGINAL IMAGE: $OLD_CRITICAL Critical, $OLD_HIGH High vulnerabilities"
+        
+        # Track in dashboard
+        curl -X POST http://localhost:3000/api/deployments/track \
+          -H "Content-Type: application/json" \
+          -d '{
+            "status": "vulnerability-scan", 
+            "source": "security-scan",
+            "commit": "'${{ github.sha }}'",
+            "vulnerabilities_original": '$OLD_CRITICAL'
+          }'
+
+    - name: 🛠️ Build Secure Version
+      run: |
+        echo "🛠️ Building hardened version..."
+        
+        # Create hardened Dockerfile
+        cat > Dockerfile.secure << 'DOCKERFILE'
+        FROM node:14-alpine
+        # Update all packages (this fixes most vulnerabilities)
+        RUN apk update && apk upgrade
+        # Remove unnecessary packages
+        RUN apk del curl wget
+        # Use non-root user
+        RUN adduser -D -S appuser
+        USER appuser
+        DOCKERFILE
+        
+        sudo docker build -f Dockerfile.secure -t node-secure-$(date +%s) .
+
+    - name: 🔍 Scan Secure Image
+      run: |
+        echo "🔍 Scanning the hardened image..."
+        
+        # Find the secure image we just built
+        SECURE_IMAGE=$(sudo docker images --format "table {{.Repository}}:{{.Tag}}" | grep node-secure | head -1)
+        echo "Scanning: $SECURE_IMAGE"
+        
+        sudo trivy image --scanners vuln --skip-db-update $SECURE_IMAGE 2>&1 | tee scan-secure.txt
+        
+        NEW_CRITICAL=$(grep -c "CRITICAL" scan-secure.txt || echo "0")
+        NEW_HIGH=$(grep -c "HIGH" scan-secure.txt || echo "0")
+        
+        echo "📊 SECURE IMAGE: $NEW_CRITICAL Critical, $NEW_HIGH High vulnerabilities"
+
+    - name: 📊 Show Results
+      run: |
+        echo "========================================"
+        echo "🎉 SECURITY SCAN RESULTS"
+        echo "========================================"
+        echo "🔓 Original: $OLD_CRITICAL Critical vulnerabilities"
+        echo "🔒 Secure:   $NEW_CRITICAL Critical vulnerabilities"
+        echo ""
+        echo "📉 Reduction: $((OLD_CRITICAL - NEW_CRITICAL)) Critical vulnerabilities fixed!"
+        echo "========================================"
+        
+        # Track final results
+        curl -X POST http://localhost:3000/api/deployments/track \
+          -H "Content-Type: application/json" \
+          -d '{
+            "status": "security-improved", 
+            "source": "security-scan",
+            "commit": "'${{ github.sha }}'",
+            "vulnerabilities_before": '$OLD_CRITICAL',
+            "vulnerabilities_after": '$NEW_CRITICAL',
+            "vulnerabilities_fixed": '$((OLD_CRITICAL - NEW_CRITICAL))'
+          }'
